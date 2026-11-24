@@ -89,7 +89,13 @@ export async function capturePreferences(h: Harness) {
     await wait('document.querySelector("[data-setting=model]")?.textContent.includes("gpt-x-large")');
     assert.equal(JSON.parse(await readFile(config,'utf8')).agents.codex.model,'gpt-x-large');
     await check('自定义模型隐藏跟随配置说明','!document.querySelector("[data-setting=model]").closest(".set-r").textContent.includes("括号里")');
-    await click('[data-setting=effort]');await click('.ctx button:nth-child(5)');
+    for (const effort of ['max','ultra']) {
+        await click('[data-setting=effort]');
+        await evaluate(`[...document.querySelectorAll('.ctx button')].find(b=>b.textContent.trim()===${JSON.stringify(effort)}).click()`);
+        await wait(`document.querySelector('[data-setting=effort]').textContent.includes(${JSON.stringify(effort)})`);
+        assert.equal(JSON.parse(await readFile(config,'utf8')).agents.codex.effort,effort);
+    }
+    await save('settings-effort-ultra');
     await click('[data-setting=tier]');await click('.ctx button:nth-child(2)');
     await check('环境变量覆盖在对应行说明','document.querySelector("[data-setting=tier]").closest(".set-r").textContent.includes("环境变量 CODEX_TIER 正在覆盖这一项（priority）")');
     await save('settings-configured-dark');nativeTheme.themeSource='light';await save('settings-configured-light');nativeTheme.themeSource='dark';

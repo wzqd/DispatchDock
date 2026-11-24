@@ -1,0 +1,104 @@
+// 复制到隔离目录后作为 CommonJS 假 Codex 运行。每轮单独落盘，支持多派发进程。
+const fs = require('node:fs'), path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const dir = __dirname;
+const file = name => path.join(dir, name);
+const get = (name, fallback) => fs.existsSync(file(name)) ? JSON.parse(fs.readFileSync(file(name), 'utf8')) : fallback;
+const put = (name, value) => {
+  const temp = file(name + '.' + process.pid + '.tmp');
+  fs.writeFileSync(temp, JSON.stringify(value)); fs.renameSync(temp, file(name));
+};
+const log = data => fs.appendFileSync(file('calls.jsonl'), JSON.stringify(data) + '\n');
+const config = get('agent.json', {});
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('codex-cli test-fixture'); return; }
+if (args[0] === 'queue') {
+  const id = randomUUID(), thread = args[args.indexOf('--thread') + 1], prompt = args[args.indexOf('--message') + 1];
+  const q = { id, clientUserMessageId: randomUUID(), thread, prompt, at: Date.now(), turnId: randomUUID() };
+  put('queue-' + id, q);
+  log({ method: 'queue', thread, prompt });
+  console.log('Queued message ' + id + ' for thread ' + thread + '.'); return;
+}
+if (args[0] !== 'app-server') process.exit(2);
+const send = m => console.log(JSON.stringify(m));
+const notify = (method, params) => send({ method, params });
+const queues = thread => fs.readdirSync(dir).filter(n => n.startsWith('queue-') && !n.endsWith('.tmp')).map(n => get(n)).filter(q => q.thread === thread).sort((a,b) => a.at-b.at || a.id.localeCompare(b.id));
+function schedule(thread) {
+  let previous = 0;
+  const opened = file('opened-' + thread);
+  const active = !config.neverStart && (config.occupied || fs.existsSync(opened));
+  const openedAt = fs.existsSync(opened) ? fs.statSync(opened).mtimeMs : 0;
+  return queues(thread).map(q => {
+    const start = active ? Math.max(previous, q.at + (config.startDelay ?? 30), openedAt) : Infinity;
+    const end = start + (config.duration ?? 70);
+    previous = end;
+    return { q, start, end };
+  });
+}
+const history = thread => fs.readdirSync(dir).filter(n => n.startsWith('turn-') && !n.endsWith('.tmp')).map(n => get(n)).filter(t => t.thread === thread).sort((a,b) => b.at-a.at);
+const page = data => ({ data, nextCursor: null });
+const reply = prompt => config.report ?? prompt.split('\n').at(-1);
+const rl = require('node:readline').createInterface({ input: process.stdin });
+rl.on('line', line => {
+  const m = JSON.parse(line), p = m.params ?? {}, thread = p.threadId;
+  const ok = result => send({ id: m.id, result });
+  const fail = message => send({ id: m.id, error: { code: -32000, message } });
+  if (m.id == null) return;
+  if (!m.method) { log(m); return; }
+  log({ method: m.method, p, pid: process.pid });
+  switch (m.method) {
+    case 'initialize': return ok({});
+    case 'thread/start': {
+      const id = randomUUID(); put('thread-' + id, { id }); return ok({ thread: { id } });
+    }
+    case 'thread/name/set': return ok({});
+    case 'thread/read': return get('thread-' + thread) ? ok({ thread: { id: thread } }) : fail('thread not found');
+    case 'thread/list': return ok(page(config.archived ? [{ id: config.archived }] : []));
+    case 'thread/resume': return config.occupied || fs.existsSync(file('opened-' + thread)) ? fail('already has an active writer') : ok({ thread: { id: thread } });
+    case 'turn/start': {
+      const id = randomUUID(), prompt = p.input[0].text, ctx = { threadId: thread, turnId: id };
+      const prep = prompt.startsWith('这是 DispatchDock 的派发对话');
+      put('echo.json', { pid: process.pid, prompt, home: process.env.CODEX_HOME, key: process.env.OPENAI_API_KEY });
+      if (config.tree) require('node:child_process').spawn(process.execPath, [file('descendant.cjs')], { stdio: 'ignore', windowsHide: true });
+      ok({ turn: { id, status: 'inProgress' } });
+      if (config.approval) send({ id: 99, method: 'item/commandExecution/requestApproval', params: ctx });
+      const item = { type: 'agentMessage', id: randomUUID(), text: prep ? '已就绪' : reply(prompt) };
+      if (config.fixtureError) notify('error', { ...ctx, error: { message: '示例条目错误' } });
+      if (config.fixtureFile) notify('item/completed', { ...ctx, item: { type: 'fileChange', id: 'change', changes: [{ path: 'src/new.ts', kind: { type: 'add' } }] } });
+      notify('item/completed', { ...ctx, item });
+      const finish = () => {
+        const error = config.exit || prep && config.prepFail ? { message: config.stderr || '准备失败' } : null;
+        const turn = { id, thread, at: Date.now(), items: [item], status: error ? 'failed' : 'completed', error };
+        put('turn-' + id, turn); notify('turn/completed', { threadId: thread, turn });
+      };
+      if (config.gated) { const timer = setInterval(() => { if (fs.existsSync(file('release-agent'))) { clearInterval(timer); finish(); } }, 25); }
+      else setTimeout(finish, config.duration ?? 0);
+      return;
+    }
+    case 'thread/queue/list': return ok(page(schedule(thread).filter(s=>s.start>Date.now()).map(s=>s.q)));
+    case 'thread/turns/list': {
+      const turns = history(thread);
+      if (!config.neverStart && (config.occupied || fs.existsSync(file('opened-' + thread)))) {
+        const at = Date.now();
+        for (const {q,start,end} of schedule(thread)) {
+          if (start > at) break;
+          const done = at >= end;
+          const status = done ? config.status ?? 'completed' : 'interrupted';
+          const user = { type: 'userMessage', id: config.noIds ? 'user-' + q.turnId : q.id, clientId: config.noIds ? null : q.clientUserMessageId, content: [{ type: 'text', text: q.prompt }] };
+          const items = [user];
+          if (done && status === 'completed') items.push({ type: 'agentMessage', id: 'reply-' + q.id, text: reply(q.prompt) });
+          turns.unshift({ id: q.turnId, status, completedAt: done ? Math.floor(end / 1000) : null, items, error: status === 'failed' ? { message: '桌面示例失败' } : null });
+          if (!done) break;
+        }
+      }
+      return ok(page(turns.slice(0, p.limit)));
+    }
+    case 'thread/items/list': {
+      const {q,end} = schedule(thread).find(s => s.q.turnId === p.turnId);
+      const items = [{ type: 'userMessage', id: config.noIds ? 'user-' + q.turnId : q.id, clientId: config.noIds ? null : q.clientUserMessageId, content: [{ type: 'text', text: q.prompt }] }];
+      if (Date.now() >= end && (config.status ?? 'completed') === 'completed') items.push({ type: 'agentMessage', id: 'reply-' + q.id, text: reply(q.prompt) });
+      return ok(page(items.map(item => ({ turnId: q.turnId, item }))));
+    }
+    default: return fail('未知方法 ' + m.method);
+  }
+});

@@ -91,7 +91,7 @@ export async function createPreferences(root, data, env = process.env) {
         if (payload.key === 'managed') { if (typeof payload.value !== 'boolean') throw Error('Invalid value'); config.writeConfig(home, { managed: payload.value }); return settings(); }
         if (!['model', 'effort', 'tier', 'sandbox', 'watchWindow', 'path'].includes(payload.key)) throw Error('Invalid setting');
         if (payload.value !== null && typeof payload.value !== 'string') throw Error('Invalid value');
-        const choices = { effort: ['minimal','low','medium','high','xhigh'], tier: ['default','priority','flex'], sandbox: ['workspace-write','read-only'], watchWindow: ['auto','always','never'] };
+        const choices = { effort: ['minimal','low','medium','high','xhigh','max','ultra'], tier: ['default','priority','flex'], sandbox: ['workspace-write','read-only'], watchWindow: ['auto','always','never'] };
         if (payload.value !== null && choices[payload.key] && !choices[payload.key].includes(payload.value)) throw Error('Invalid value');
         config.writeConfig(home, { [payload.key]: payload.value }); return settings();
       }

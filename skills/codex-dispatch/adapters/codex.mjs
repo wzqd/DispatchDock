@@ -1,3 +1,4 @@
+import { executeCodex } from './codex-threads.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync, realpathSync } from 'node:fs';
 import { delimiter, dirname, relative, resolve } from 'node:path';
@@ -78,23 +79,14 @@ export function mapLine(line, { root }) {
 
 export const codex = {
   id: 'codex',
-  writesReport: true,
+  writesReport: false,
+  execute: executeCodex,
   detect({ env = process.env, settings = {}, platform = process.platform, launcherOptions = {} } = {}) {
     try {
       const launcher = resolveLauncher(env, platform, settings.path, launcherOptions);
       const result = spawnSync(launcher.executable, [...launcher.args, '--version'], { env, encoding: 'utf8', shell: false, windowsHide: true, timeout: 10000 });
       return { installed: !result.error && result.status === 0, version: result.status === 0 ? result.stdout.trim() || null : null, launcher };
     } catch (error) { return { installed: false, version: null, error: error.message }; }
-  },
-  command({ root, report, prompt, settings, detection, env = process.env }) {
-    const launcher = detection?.launcher ?? resolveLauncher(env, process.platform, settings.path);
-    const args = [...launcher.args, 'exec', '--json', '-C', root];
-    if (settings.model != null) args.push('-m', settings.model);
-    if (settings.effort != null) args.push('-c', `model_reasoning_effort=${JSON.stringify(settings.effort)}`);
-    if (settings.tier != null) args.push('-c', `service_tier=${JSON.stringify(settings.tier)}`);
-    if (settings.sandbox != null) args.push('-s', settings.sandbox);
-    args.push('-o', report, '-');
-    return { executable: launcher.executable, args, stdin: prompt };
   },
   mapLine,
   failureHint(stderr) {

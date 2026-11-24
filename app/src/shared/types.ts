@@ -22,6 +22,9 @@ export interface Task {
         host: string;
         session: string | null;
     };
+    threadId?: string;
+    threadMode?: 'new' | 'resume' | 'specified';
+    runner?: 'desktop' | 'background';
     agentPid?: number;
     managed?: boolean;
     status: Status;

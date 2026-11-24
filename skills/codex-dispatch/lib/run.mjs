@@ -7,7 +7,7 @@ import { dispatcher, parseArgs, taskDetails } from './options.mjs';
 import { recordPaths, registryWriter } from './records.mjs';
 import { clip, formatProgress, progressFooter, progressHeader } from './progress.mjs';
 import { openWatch, shouldWatch, viewerTakesOver } from './watch.mjs';
-import { acceptsManaged, viewerApp, managedEnvironment, validRequest, existingPaths, handoff, fallbackMessage, managedMessage } from './managed.mjs';
+import { acceptsManaged, viewerApp, managedEnvironment, validRequest, existingPaths, handoff, fallbackMessage, managedMessage, overrideKeys } from './managed.mjs';
 import { printCompletion } from './completion.mjs';
 import { waitForTask } from './wait.mjs';
 import { stopTask } from './stop.mjs';
@@ -34,7 +34,7 @@ export async function run({ adapter, scriptPath, args = process.argv.slice(2), e
   const request = requestFile ? JSON.parse(readFileSync(requestFile, 'utf8')) : null;
   if (request && !validRequest(request)) throw Error('请求文件无效');
   if (request) root = request.repo;
-  const parsed = request ? { task: request.args.task, extra: request.args.extra, opts: { name: request.name, ...(request.args.role ? { role: request.args.role } : {}) } } : parseArgs(args);
+  const parsed = request ? { task: request.args.task, extra: request.args.extra, opts: { name: request.name, thread: request.args.thread, newThread: request.args.newThread, background: request.args.background, ...(request.args.role ? { role: request.args.role } : {}) } } : parseArgs(args);
   const details = taskDetails(root, parsed);
   const dryRun = !request && !!env.CODEX_DRY_RUN;
   const started = Date.now();
@@ -47,7 +47,9 @@ export async function run({ adapter, scriptPath, args = process.argv.slice(2), e
   console.log(`记录名：${paths.name}\n进度：${paths.progress}`);
   const home = homeDirectory(env);
   const registry = registryWriter(home);
-  const { settings, warning, config } = request ? { settings: { ...request.settings, watchWindow: 'never' }, warning: null, config: {} } : loadConfig(home, parsed.opts, env);
+  const { settings, warning, config, sources } = request ? { settings: { ...request.settings, watchWindow: 'never' }, warning: null, config: {} } : loadConfig(home, parsed.opts, env);
+  const overrides = request ? request.args.overrides ?? [] :
+    overrideKeys.filter(key => sources[key] === '命令行' || sources[key].startsWith('环境变量 '));
   writeFileSync(paths.raw, '');
   writeFileSync(paths.events, '');
   const interactive = !!process.stdout.isTTY;
@@ -57,20 +59,27 @@ export async function run({ adapter, scriptPath, args = process.argv.slice(2), e
     if (interactive) console.log(line);
   };
   if (warning) { progress(warning); if (!interactive) console.log(warning); }
-  if (request) progress(managedMessage(request.app));
+  let pendingHandoff = request ? managedMessage(request.app) : null;
+  const logHandoff = () => {
+    if (pendingHandoff) progress(pendingHandoff);
+    pendingHandoff = null;
+  };
+  if (!adapter.execute) logHandoff();
   const id = request?.id ?? `${paths.name}-${started}-${process.pid}`;
   const source = request?.dispatcher ?? dispatcher(parsed.opts.host, env, scriptPath);
   if (!request && acceptsManaged(home, config.managed === true)) {
     const app = viewerApp(home);
     const announce = text => { if (text === managedMessage(app)) console.log(text); else { progress(text); if (!interactive) console.log(text); } };
     const result = await handoff(home, { v: 1, id, app, at: started, script: scriptPath, node: process.execPath, repo: root, name: paths.name,
-      args: { task: parsed.task, extra: parsed.extra, role: parsed.opts.role ?? null, spec: details.spec },
+      args: { task: parsed.task, extra: parsed.extra, role: parsed.opts.role ?? null, spec: details.spec, thread: parsed.opts.thread ?? null, newThread: !!parsed.opts.newThread, background: !!parsed.opts.background, overrides },
       settings: Object.fromEntries(['model','effort','tier','sandbox','path'].map(key => [key, settings[key]])), dispatcher: source, env: managedEnvironment(env) }, announce,
       { startTimeout: Number(env.CODEX_DISPATCH_TEST_START_TIMEOUT_MS) > 0 ? Number(env.CODEX_DISPATCH_TEST_START_TIMEOUT_MS) : 15000 });
     if ('exit' in result) {
       return printCompletion(result.exit, paths);
     }
-    announce(fallbackMessage(result.reason, app));
+    const fallback = fallbackMessage(result.reason, app);
+    if (adapter.execute) { pendingHandoff = fallback; if (!interactive) console.log(fallback); }
+    else announce(fallback);
   }
   const detection = await adapter.detect({ env, settings });
   registry({ event: 'start', id, repo: root, name: paths.name, spec: details.spec ? relative(canonicalPath(root), canonicalPath(resolvePath(root, details.spec))).replaceAll('\\', '/') : null,
@@ -88,16 +97,57 @@ export async function run({ adapter, scriptPath, args = process.argv.slice(2), e
     if (event.kind === 'error') errors.push(event.text);
     for (const line of formatProgress(unified)) progress(line, at);
   };
-  const finish = code => {
+  const finish = (code, signal) => {
+    logHandoff();
     if (!adapter.writesReport && lastSay !== null) writeFileSync(paths.report, lastSay);
     const minutes = ((Date.now() - started) / 60000).toFixed(1);
     appendFileSync(paths.progress, progressFooter(code, minutes, paths.report));
-    registry({ event: 'end', id, exit: code, at: Date.now(), minutes: Number(minutes) });
+    registry(signal ? { event: 'interrupted', id, signal, at: Date.now() } : { event: 'end', id, exit: code, at: Date.now(), minutes: Number(minutes) });
     // 后台派发时进度不打印到标准输出；失败原因放在退出码前面，派活方不用翻日志就能看到。
     if (code !== 0 && !interactive) for (const text of errors) console.log(`出错：${clip(text)}`);
     console.log(`exit=${code} report=${paths.report}`);
     return code ?? 1;
   };
+  if (adapter.execute) {
+    const children = new Set();
+    const spawned = (pid, primary = true) => {
+      if (pid) children.add(pid);
+      if (primary) registry({ event: 'spawned', id, codexPid: pid ?? null, agentPid: pid ?? null, at: Date.now() });
+      return () => children.delete(pid);
+    };
+    let stopping = false;
+    const handlers = ['SIGINT','SIGTERM','SIGBREAK','SIGHUP'].map(signal => {
+      const handler = async () => {
+        if (stopping) return;
+        stopping = true;
+        await Promise.allSettled([...children].map(pid => killProcessTree(pid)));
+        appendFileSync(paths.progress, `\n=== 派发脚本收到 ${signal}，被外部中断 ===\n`);
+        registry({ event: 'interrupted', id, signal, at: Date.now() });
+        process.exit(1);
+      };
+      process.on(signal, handler);
+      return [signal, handler];
+    });
+    if (shouldWatch({ platform: process.platform, interactive, policy: settings.watchWindow, takeover: viewerTakesOver(home) })) openWatch(paths.name, paths.progress);
+    const write = event => {
+      const at = Date.now();
+      appendFileSync(paths.raw, JSON.stringify({ ...event, _at: at }) + '\n');
+      if (event.type !== 'thread.started') logHandoff();
+      for (const mapped of adapter.mapLine(JSON.stringify(event), { root })) emit(mapped, at);
+    };
+    try {
+      const result = await adapter.execute({ root, home, id, title: details.title, role: details.role?.name ?? null, prompt: details.prompt,
+        settings, opts: parsed.opts, explicitSettings: overrides.length > 0, env, detection, spawned, write,
+        thread: data => registry({ event: 'thread', id, ...data, at: Date.now() }),
+        announce: text => { progress(text); if (!request && !interactive) console.log(text); },
+      });
+      if (!stopping) return finish(result.code, result.signal);
+    } catch (error) {
+      if (!stopping) { write({ type: 'error', message: error.message }); return finish(1); }
+    } finally { if (!stopping) for (const [signal, handler] of handlers) process.off(signal, handler); }
+    // 信号处理器在整棵子进程树退出后记录中断。
+    return await new Promise(() => {});
+  }
   let command;
   try { command = adapter.command({ root, report: paths.report, prompt: details.prompt, settings, detection, env }); }
   catch (error) { emit({ kind: 'error', text: `启动 Codex 失败：${error.message}` }); return finish(1); }

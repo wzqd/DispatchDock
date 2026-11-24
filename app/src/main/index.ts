@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { Worker } from 'node:worker_threads';
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { validThreadId } from '../../../skills/codex-dispatch/lib/paths.mjs';
 import { Registry, reportText } from './registry';
 import { createPlatform } from './platform';
 import { readEvents, validCursor } from './events';
@@ -139,6 +140,10 @@ app.whenReady().then(async () => {
         const t = task(id);
         if (action === 'stop')
             return registry.stop(t.id);
+        if (action === 'thread') {
+            if (!validThreadId(t.threadId)) throw Error(c.changed);
+            return shell.openExternal('codex://threads/' + t.threadId);
+        }
         if (action === 'hide')
             return registry.hide(t.id);
         if (action === 'copy') {

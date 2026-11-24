@@ -23,6 +23,10 @@ test('配置即时写入、保留未知字段、显示环境覆盖和 Codex 当�
   const result=await service.run('save',{key:'model',value:'custom-model'});
   assert.equal(result.values.model,'custom-model');assert.equal(result.current.model,'gpt-x');assert.deepEqual(result.overrides.tier,{name:'CODEX_TIER',value:'priority'});
   const disk=JSON.parse(await readFile(path.join(home,'config.json'),'utf8'));
+  for (const effort of ['max','ultra']) {
+    await service.run('save',{key:'effort',value:effort});
+    assert.equal(JSON.parse(await readFile(path.join(home,'config.json'),'utf8')).agents.codex.effort,effort);
+  }
   assert.deepEqual(disk.extension,{keep:true});assert.equal(disk.agents.codex.future,'value');assert.equal(disk.agents.other.keep,1);
   await service.run('save',{key:'model',value:null});assert.equal((await service.run('settings')).values.model,null);
   await service.run('save',{key:'watchWindow',value:'never'});assert.equal(JSON.parse(await readFile(path.join(home,'config.json'),'utf8')).watchWindow,'never');

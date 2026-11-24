@@ -1,6 +1,8 @@
 import { realpathSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 
+export const validThreadId = value => typeof value === 'string' && /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(value);
+
 export function canonicalPath(file) {
   const original = resolve(file), tail = [];
   let current = original;

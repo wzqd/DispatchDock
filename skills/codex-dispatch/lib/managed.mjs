@@ -12,6 +12,7 @@ export function viewerApp(home) {
 }
 export const managedMessage = app => `托管：任务已交给 ${appName(app)}，关掉当前会话也不会中断。`;
 export const fallbackMessage = (reason, app) => `托管：${appName(app)} 没有接手（${reason}），改为直接运行`;
+export const overrideKeys = ['model', 'effort', 'tier', 'sandbox'];
 export const environmentKeys = ['PATH', 'CODEX_HOME', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'TMPDIR', 'SystemRoot', 'ComSpec', 'PATHEXT', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'OPENAI_BASE_URL'];
 export function managedEnvironment(env) {
   return Object.fromEntries(environmentKeys.flatMap(key => {
@@ -35,6 +36,10 @@ export function validRequest(r) {
     && typeof r.name === 'string' && !!r.name && !/[<>:"/\\|?*\x00-\x1f]/.test(r.name) && !/[. ]$/.test(r.name)
     && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(r.name)
     && object(r.args) && typeof r.args.task === 'string' && !!r.args.task && typeof r.args.extra === 'string' && nullable(r.args.role) && nullable(r.args.spec)
+    && (r.args.thread === undefined || nullable(r.args.thread) && r.args.thread !== '')
+    && ['newThread', 'background'].every(k => r.args[k] === undefined || typeof r.args[k] === 'boolean')
+    && (r.args.overrides === undefined || Array.isArray(r.args.overrides) && r.args.overrides.every(key => overrideKeys.includes(key)))
+    && !(r.args.thread && r.args.newThread)
     && object(r.settings) && ['model','effort','tier','path'].every(k => nullable(r.settings[k])) && typeof r.settings.sandbox === 'string'
     && (r.settings.path === null || isAbsolute(r.settings.path))
     && object(r.dispatcher) && ['claude-code','devin','unknown'].includes(r.dispatcher.host) && nullable(r.dispatcher.session)

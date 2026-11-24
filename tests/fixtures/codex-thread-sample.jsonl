@@ -1,0 +1,10 @@
+{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"sample-agent_message","text":"已检查示例仓库。\n接下来执行验证。"}}}
+{"method":"item/started","params":{"item":{"type":"webSearch","id":"sample-web_search","query":"示例工具文档"}}}
+{"method":"item/started","params":{"item":{"type":"mcpToolCall","id":"sample-mcp_tool_call","server":"example","tool":"inspect","status":"inProgress","arguments":{}}}}
+{"method":"item/completed","params":{"item":{"type":"fileChange","id":"sample-file_change","status":"completed","changes":[{"path":"src/example.ts","kind":{"type":"add"},"diff":""}]}}}
+{"method":"item/started","params":{"item":{"type":"commandExecution","id":"cmd-ok","command":"powershell.exe -Command \"node check.mjs\"","status":"inProgress","aggregatedOutput":null,"exitCode":null}}}
+{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"cmd-ok","command":"powershell.exe -Command \"node check.mjs\"","status":"completed","aggregatedOutput":"验证通过\n","exitCode":0}}}
+{"method":"item/started","params":{"item":{"type":"commandExecution","id":"cmd-fail","command":"powershell.exe -Command \"node check.mjs\"","status":"inProgress","aggregatedOutput":null,"exitCode":null}}}
+{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"cmd-fail","command":"powershell.exe -Command \"node check.mjs\"","status":"failed","aggregatedOutput":"示例失败\n","exitCode":1}}}
+{"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"last":{"inputTokens":100,"outputTokens":20}}}}
+{"method":"turn/completed","params":{"turn":{"status":"completed"}}}

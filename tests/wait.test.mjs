@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { once } from 'node:events';
 import { reverseRows, findStart, waitForTask } from '../skills/codex-dispatch/lib/wait.mjs';
@@ -81,14 +81,15 @@ test('同一仓库的符号链接和实际路径能找到同一任务', { skip: 
 });
 
 test('真实派发入口使用假 agent：重新等待的失败输出与原派发逐字一致', async t => {
-  const f = fixture(t), agent = join(f.base, 'fake-agent.mjs');
-  fs.writeFileSync(agent, `if(process.argv.includes('--version')) console.log('codex-cli fake');
-else { console.log(JSON.stringify({type:'error',message:'模拟失败原因'})); process.exitCode=7; }`);
+  const f = fixture(t), agent = join(f.base, 'fake-agent.cjs');
+  assert.equal(spawnSync('git',['init','--quiet',f.repo]).status,0);
+  fs.copyFileSync(new URL('./fixtures/app-server.txt',import.meta.url),agent);
+  fs.writeFileSync(join(f.base,'agent.json'),JSON.stringify({exit:1,stderr:'模拟失败原因'}));
   Object.assign(f.env, { CODEX_DISPATCH_TEST_AGENT: agent, CODEX_NO_WATCH: '1' });
   fs.writeFileSync(join(f.home, 'config.json'), '{"v":1}');
-  const dispatched = await f.launch(['隔离任务', '--name', '中文任务']).done;
+  const dispatched = await f.launch(['隔离任务', '--name', '中文任务','--background']).done;
   const waited = await f.launch().done;
-  assert.equal(dispatched.code, 7, dispatched.stderr); assert.equal(waited.code, dispatched.code);
+  assert.equal(dispatched.code, 1, dispatched.stderr); assert.equal(waited.code, dispatched.code);
   assert.match(dispatched.stdout, /出错：模拟失败原因/);
   assert.equal(waited.stdout.split('\n').slice(1).join('\n'), dispatched.stdout.slice(dispatched.stdout.indexOf('出错：')));
 });

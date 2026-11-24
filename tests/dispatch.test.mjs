@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { execAdapter } from './fixtures/exec-adapter.mjs';
 import { codex, mapLine, limitOutput, shortCommand, resolveLauncher } from '../skills/codex-dispatch/adapters/codex.mjs';
 import { loadConfig, homeDirectory } from '../skills/codex-dispatch/lib/config.mjs';
 import { dispatcher, parseArgs, taskDetails } from '../skills/codex-dispatch/lib/options.mjs';
@@ -41,7 +42,9 @@ function setup(t) {
   }
   const config = value => fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify(value));
   config({ v: 1 });
-  const invoke = (args = [], overrides = {}, script = entry) => spawnSync(process.execPath, [script, '只回复 OK', '--name', '中文 记录', ...args], {
+  const legacyEntry = path.join(base, 'exec-test.mjs');
+  fs.writeFileSync(legacyEntry, `import {run} from ${JSON.stringify(new URL('../skills/codex-dispatch/lib/run.mjs', import.meta.url).href)}; import {execAdapter} from ${JSON.stringify(new URL('./fixtures/exec-adapter.mjs', import.meta.url).href)};process.exitCode=await run({adapter:execAdapter,scriptPath:import.meta.filename});`);
+  const invoke = (args = [], overrides = {}, script = legacyEntry) => spawnSync(process.execPath, [script, '只回复 OK', '--name', '中文 记录', ...args], {
     cwd: root, env: { ...env, ...overrides }, encoding: 'utf8', timeout: 15000, windowsHide: true, shell: false,
   });
   return { base, root, home, env, config, invoke };
@@ -100,7 +103,7 @@ test('任务说明经仓库符号链接传入时仍记录仓库内相对路径',
   fs.symlinkSync(s.root, alias, 'dir');
   fs.mkdirSync(path.join(s.root, 'docs'));
   fs.writeFileSync(path.join(s.root, 'docs/任务.md'), '隔离任务');
-  const result = spawnSync(process.execPath, [entry, path.join(alias, 'docs/任务.md')], {
+  const result = spawnSync(process.execPath, [path.join(s.base,'exec-test.mjs'), path.join(alias, 'docs/任务.md')], {
     cwd: s.root, env: s.env, encoding: 'utf8', timeout: 15000, windowsHide: true, shell: false,
   });
   assert.equal(result.status, 0, result.stderr);
@@ -126,7 +129,7 @@ test('配置优先级：命令行 > 环境变量 > 文件 > 默认；null 不传
   s.config({ v: 1, agents: { codex: { model: null, effort: null, tier: null } } });
   const settings = loadConfig(s.home, {}, {}).settings;
   assert.deepEqual(settings, { model: null, effort: null, tier: null, sandbox: 'workspace-write', path: null, watchWindow: 'auto' });
-  const command = codex.command({ root: s.root, report: path.join(s.root, '汇报.md'), prompt: 'OK', settings, env: s.env });
+  const command = execAdapter.command({ root: s.root, report: path.join(s.root, '汇报.md'), prompt: 'OK', settings, env: s.env });
   assert.ok(!command.args.includes('-m')); assert.ok(!command.args.includes('-c'));
 });
 
@@ -167,7 +170,7 @@ test('重名追加序号，dry-run 不创建目录或修改已有文件', t => {
 test('并发派发独占记录名，不覆盖同名任务', async t => {
   const s = setup(t);
   const launch = () => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [entry, '只回复 OK', '--name', '同时 派发'], { cwd: s.root, env: s.env, stdio: 'ignore', windowsHide: true });
+    const child = spawn(process.execPath, [path.join(s.base,'exec-test.mjs'), '只回复 OK', '--name', '同时 派发'], { cwd: s.root, env: s.env, stdio: 'ignore', windowsHide: true });
     child.on('error', reject); child.on('close', resolve);
   });
   assert.deepEqual(await Promise.all([launch(), launch()]), [0, 0]);
@@ -258,7 +261,10 @@ test('复制完整技能目录到 Devin 路径后仍能直接运行', t => {
     }
   };
   copyTree(path.join(project, 'skills/codex-dispatch'), copied);
-  const result = s.invoke([], {}, path.join(copied, 'codex-task.mjs'));
+  const agent = path.join(s.base, 'copy-test.cjs');
+  fs.copyFileSync(fixture('app-server.txt'),agent);
+  assert.equal(spawnSync('git',['init','--quiet',s.root]).status,0);
+  const result = s.invoke(['--background'], { CODEX_DISPATCH_TEST_AGENT: agent }, path.join(copied, 'codex-task.mjs'));
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(jsonl(path.join(s.home, 'runs.jsonl'))[0].dispatcher, { host: 'devin', session: null });
 });
@@ -310,9 +316,9 @@ test('清单不能写入时任务照常完成；找不到 agent 时记录错误�
 test('适配器不写汇报时用最后一条 say；spawn 错误也有完整结束记录', t => {
   const s = setup(t), wrapper = path.join(s.base, '测试 入口.mjs');
   const runURL = new URL('../skills/codex-dispatch/lib/run.mjs', import.meta.url).href;
-  const adapterURL = new URL('../skills/codex-dispatch/adapters/codex.mjs', import.meta.url).href;
+  const adapterURL = new URL('./fixtures/exec-adapter.mjs', import.meta.url).href;
   fs.writeFileSync(wrapper, `import { run } from ${JSON.stringify(runURL)};
-import { codex } from ${JSON.stringify(adapterURL)};
+import { execAdapter as codex } from ${JSON.stringify(adapterURL)};
 const adapter = { ...codex, writesReport: false };
 if (process.env.FAKE_SPAWN_ERROR) adapter.command = () => ({ executable: ${JSON.stringify(path.join(s.base, '不存在.exe'))}, args: [], stdin: '' });
 process.exitCode = await run({ adapter, scriptPath: import.meta.filename });\n`);
@@ -329,10 +335,10 @@ process.exitCode = await run({ adapter, scriptPath: import.meta.filename });\n`)
 test('派发信号保留 interrupted 记录，不停止其他进程', t => {
   const s = setup(t), wrapper = path.join(s.base, '信号 入口.mjs');
   const runURL = new URL('../skills/codex-dispatch/lib/run.mjs', import.meta.url).href;
-  const adapterURL = new URL('../skills/codex-dispatch/adapters/codex.mjs', import.meta.url).href;
+  const adapterURL = new URL('./fixtures/exec-adapter.mjs', import.meta.url).href;
   // 假 agent 输出首行后，测试入口自行触发信号；处理器只结束本测试的假 agent 树。
   fs.writeFileSync(wrapper, `import { run } from ${JSON.stringify(runURL)};
-import { codex } from ${JSON.stringify(adapterURL)};
+import { execAdapter as codex } from ${JSON.stringify(adapterURL)};
 const adapter = { ...codex, mapLine(line, context) { process.emit('SIGTERM'); return codex.mapLine(line, context); } };
 process.exitCode = await run({ adapter, scriptPath: import.meta.filename });\n`);
   const result = s.invoke([], {}, wrapper);

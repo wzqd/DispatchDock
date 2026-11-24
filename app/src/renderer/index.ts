@@ -22,7 +22,7 @@ let state: Snapshot = { tasks: [], theme: 'dark', version: '0.1.0' }, page = 'ta
 let query = '', taskList: TaskListView | undefined;
 const preferences = new PreferencesView(() => { nav(); pageView(); }, () => { nav(); if(page==='tasks'&&!preferences.wizard) header(); });
 const current = () => state.tasks.find(t => t.id === selected);
-const headerKey = (t: Task) => JSON.stringify([t.id, t.title, t.status, t.role, t.started, t.ended, t.minutes, t.exit, t.signal, t.commit, t.dispatcher?.host,t.managed,preferences.settings?.managed]);
+const headerKey = (t: Task) => JSON.stringify([t.id, t.title, t.status, t.role, t.started, t.ended, t.minutes, t.exit, t.signal, t.commit, t.dispatcher?.host,t.managed,t.threadId,t.runner,t.threadMode,preferences.settings?.managed]);
 const action = (name: string, value?: string) => window.dock.action(selected, name, value).catch(notice);
 function shell() { root.innerHTML = `<div class="tb-l">${brand}${c.app}</div><div class="tb-r"></div><nav class="nav"></nav><section class="content"></section>`; nav(); pageView(); }
 function nav() { const running = state.tasks.filter(t => t.status === 'run').length; root.querySelector('.nav')!.innerHTML = [['tasks', 'stack-line', c.tasks], ['connect', 'plug-line', c.connect], ['sp', '', ''], ['settings', 'settings-3-line', c.settings], ['about', 'information-line', c.about]].map(([key, i, label]) => key === 'sp' ? '<span class="sp"></span>' : `<button ${preferences.wizard ? 'disabled' : ''} data-page="${key}" ${page === key ? 'aria-current="page"' : ''}>${icon(i)}${label}${key === 'tasks' && running ? `<span class="count">${running}</span>` : ''}</button>`).join('') + `<div class="nav-foot"><div><span class="dot ${running ? 'run' : 'ok'}"></span>${c.running(running)}</div><button data-managed-settings ${preferences.wizard?'disabled':''}>${icon('shield-check-line')}${preferences.settings?.managed?c.managedOn:c.managedOff}</button></div>`; }
@@ -75,7 +75,7 @@ function list() {
             node.innerHTML = `${esc(day)}<span class="mono">${stamp}</span>`;
         } });
         for (const t of rows) entries.push({ key: 'task:' + t.id, tag: 'button', signature: JSON.stringify([t, selected === t.id]), render(node) {
-            const tail = t.imported ? c.imported : t.status === 'run' ? t.last : t.status === 'fail' ? `exit=${t.exit}` : t.status === 'stop' ? (t.signal === 'stopped-by-app' ? c.stoppedShort : t.signal === 'stopped-by-command' ? c.stoppedByCommandShort : c.closed) : t.commit ?? (t.sandbox === 'read-only' ? c.readonly : '');
+            const tail = t.imported ? c.imported : t.status === 'run' ? t.last : t.status === 'fail' ? `exit=${t.exit}` : t.status === 'stop' ? (t.signal === 'stopped-by-app' ? c.stoppedShort : t.signal === 'stopped-by-command' ? c.stoppedByCommandShort : t.signal === 'stopped-in-codex' ? c.stoppedInCodexShort : c.closed) : t.commit ?? (t.sandbox === 'read-only' ? c.readonly : '');
             node.className = `trow is-${t.status === 'run' ? 'running' : t.status}${selected === t.id ? ' on' : ''}`;
             node.dataset.task = t.id;
             node.innerHTML = `${mark(t.status)}<span class="tm"><b>${esc(t.title)}</b><span class="${t.status === 'run' ? 'live' : ''}">${esc(project(t))}${tail ? ' · ' + esc(tail) : ''}</span></span><span class="ts"><span class="mono" ${t.status === 'run' ? `data-elapsed="${esc(t.id)}"` : ''}>${t.status === 'run' ? elapsed(t) : clock(t.started)}</span></span>`;
@@ -116,8 +116,8 @@ function header() {
     if (!t)
         return;
     detailSignature = headerKey(t);
-    root.querySelector('.dh')!.innerHTML = `<div class="dh-1"><h2>${esc(t.title)}</h2>${t.managed?`<span class="tag">${c.managed}</span>`:''}<span class="acts">${t.status === 'run' ? `<button class="btn sm danger" data-stop>${icon('stop-circle-line')}${c.stop}</button>` : ''}<button class="btn icon quiet" data-more data-tip="${c.more}" aria-label="${c.more}" aria-haspopup="menu">${icon('more-2-fill')}</button></span></div><div class="dh-2"><span class="dh-state ${marks[t.status][0]}">${mark(t.status)}${c.status[t.status]}${t.status === 'run' ? ` · <span data-elapsed="${esc(t.id)}">${elapsed(t)}</span>` : t.status === 'done' ? ` · ${c.elapsed} ${t.minutes ?? '—'} ${c.minutes}` : t.status === 'fail' ? ` · exit=${t.exit}` : ''}</span><span>${icon('folder-3-line')}${esc(project(t))}</span><span>${icon('user-3-line')}${esc(host(t))}${t.role ? ' · ' + esc(t.role) : ''}</span><span>${icon('time-line')}${clock(t.started)} ${c.started}</span>${t.commit ? `<span>${icon('git-commit-line')}<span class="mono">${t.commit}</span></span>` : ''}</div>`;
-    root.querySelector('.banner-holder')!.innerHTML = ['fail', 'stop'].includes(t.status) ? `<div class="banner ${t.status === 'fail' ? 'fail' : 'warn'}">${mark(t.status)}<div class="rt"><b>${esc(t.status === 'fail' ? c.failedTitle(t.exit) : t.signal === 'stopped-by-app' ? c.stopped : t.signal === 'stopped-by-command' ? c.stoppedByCommand : c.interruptedTitle)}</b><span>${t.status === 'fail' ? c.failedHelp : ['stopped-by-app','stopped-by-command'].includes(t.signal ?? '') ? c.stoppedHelp : c.interruptedHelp}</span></div>${t.status==='stop'&&!['stopped-by-app','stopped-by-command'].includes(t.signal ?? '')&&!preferences.settings?.managed?`<button class="btn sm" data-managed-settings>${c.goSettings}</button>`:''}</div>` : '';
+    root.querySelector('.dh')!.innerHTML = `<div class="dh-1"><h2>${esc(t.title)}</h2>${t.managed?`<span class="tag">${c.managed}</span>`:''}<span class="acts">${t.status === 'run' && t.runner === 'desktop' ? `<button class="btn sm" data-open="thread">${icon('external-link-line')}${c.openInCodex}</button>` : t.status === 'run' ? `<button class="btn sm danger" data-stop>${icon('stop-circle-line')}${c.stop}</button>` : ''}<button class="btn icon quiet" data-more data-tip="${c.more}" aria-label="${c.more}" aria-haspopup="menu">${icon('more-2-fill')}</button></span></div><div class="dh-2"><span class="dh-state ${marks[t.status][0]}">${mark(t.status)}${c.status[t.status]}${t.status === 'run' ? ` · <span data-elapsed="${esc(t.id)}">${elapsed(t)}</span>` : t.status === 'done' ? ` · ${c.elapsed} ${t.minutes ?? '—'} ${c.minutes}` : t.status === 'fail' ? ` · exit=${t.exit}` : ''}</span><span>${icon('folder-3-line')}${esc(project(t))}</span><span>${icon('user-3-line')}${esc(host(t))}${t.role ? ' · ' + esc(t.role) : ''}</span><span>${icon('time-line')}${clock(t.started)} ${c.started}</span>${t.commit ? `<span>${icon('git-commit-line')}<span class="mono">${t.commit}</span></span>` : ''}</div>`;
+    root.querySelector('.banner-holder')!.innerHTML = ['fail', 'stop'].includes(t.status) ? `<div class="banner ${t.status === 'fail' ? 'fail' : 'warn'}">${mark(t.status)}<div class="rt"><b>${esc(t.status === 'fail' ? c.failedTitle(t.exit) : t.signal === 'stopped-by-app' ? c.stopped : t.signal === 'stopped-by-command' ? c.stoppedByCommand : t.signal === 'stopped-in-codex' ? c.stoppedInCodex : c.interruptedTitle)}</b><span>${t.status === 'fail' ? c.failedHelp : ['stopped-by-app','stopped-by-command','stopped-in-codex'].includes(t.signal ?? '') ? c.stoppedHelp : c.interruptedHelp}</span></div>${t.status==='stop'&&!['stopped-by-app','stopped-by-command','stopped-in-codex'].includes(t.signal ?? '')&&!preferences.settings?.managed?`<button class="btn sm" data-managed-settings>${c.goSettings}</button>`:''}</div>` : '';
     tabs();
 }
 function tabs() {
@@ -162,7 +162,7 @@ function renderTab() {
     }
     else {
         const row = (key: string, value: unknown, open?: string) => `<div class="r"><span class="k">${key}</span><span class="v mono">${esc(value)}</span>${open ? `<button class="btn sm quiet" data-open="${open}">${c.open}</button>` : ''}</div>`;
-        body.innerHTML = `<div class="rows">${[[c.record, t.name], [c.spec, t.spec ?? c.direct, t.spec ? 'spec' : undefined], [c.role, t.role ?? c.noRole], [c.dispatcher, host(t)], [c.agent, t.agentVersion ?? 'Codex CLI'], [c.model, t.model ?? c.followCodex], [c.effort, t.effort ?? c.followCodex], [c.tier, t.tier ?? c.followCodex], [c.managed, t.managed?c.yes:c.no], [c.sandbox, t.sandbox ?? '—'], [c.repo, t.repo, 'repo']].map(([k, v, o]) => row(k!, v, o)).join('')}</div><div class="sec-t">${c.records}</div><div class="rows">${[[c.progress, 'progress'], [c.events, 'events'], [c.raw, 'raw']].map(([label, key]) => row(label, t[key as 'progress'] ?? '—', t[key as 'progress'] ? key : undefined)).join('')}</div>`;
+        body.innerHTML = `<div class="rows">${[[c.record, t.name], [c.spec, t.spec ?? c.direct, t.spec ? 'spec' : undefined], [c.role, t.role ?? c.noRole], [c.dispatcher, host(t)], [c.agent, t.agentVersion ?? 'Codex CLI'], ...(t.threadId && t.threadMode && t.runner ? [[c.thread, `${t.threadId}（${c.threadModes[t.threadMode]}）`], [c.runner, c.runners[t.runner]]] : []), [c.model, t.model ?? c.followCodex], [c.effort, t.effort ?? c.followCodex], [c.tier, t.tier ?? c.followCodex], [c.managed, t.managed?c.yes:c.no], [c.sandbox, t.sandbox ?? '—'], [c.repo, t.repo, 'repo']].map(([k, v, o]) => row(k!, v, o)).join('')}</div><div class="sec-t">${c.records}</div><div class="rows">${[[c.progress, 'progress'], [c.events, 'events'], [c.raw, 'raw']].map(([label, key]) => row(label, t[key as 'progress'] ?? '—', t[key as 'progress'] ? key : undefined)).join('')}</div>`;
     }
     if (tab !== 'flow') {
         const compact = root.querySelector<HTMLButtonElement>('[data-plan-top]')!;
@@ -336,7 +336,7 @@ root.addEventListener('click', async (e) => {
     }
     else if (b.hasAttribute('data-more')) {
         const t = current()!;
-        menu(b, [{ label: c.openRepo, run: () => void action('repo') }, ...(t.spec ? [{ label: c.openSpec, run: () => void action('spec') }] : []), { label: c.openReport, run: () => void action('report') }, { label: c.openProgress, run: () => void action('progress') }, { label: c.copyName, run: () => void action('copy') }, { label: c.hide, separator: true, disabled: t.status === 'run', run: () => void action('hide') }]);
+        menu(b, [...(t.threadId ? [{ label: c.openThread, run: () => void action('thread') }] : []), { label: c.openRepo, run: () => void action('repo') }, ...(t.spec ? [{ label: c.openSpec, run: () => void action('spec') }] : []), { label: c.openReport, run: () => void action('report') }, { label: c.openProgress, run: () => void action('progress') }, { label: c.copyName, run: () => void action('copy') }, { label: c.hide, separator: true, disabled: t.status === 'run', run: () => void action('hide') }]);
     }
     else if (d.open)
         void action(d.open);
@@ -363,8 +363,10 @@ function accept(s: Snapshot) { const old = JSON.stringify(state.tasks); state = 
         if (!current()) {
             detail();
         }
-        else if (detailSignature !== headerKey(current()!))
+        else if (detailSignature !== headerKey(current()!)) {
             header();
+            if (tab === 'params') renderTab();
+        }
     }
 } void refreshDetail(); }
 installScrollMaterial(document.body);

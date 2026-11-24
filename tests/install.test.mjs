@@ -517,11 +517,12 @@ test('全部回车仍写默认配置；yes 和 no-config 不询问配置；拒�
 
 test('安装后的两个宿主直接派发，假 agent 清单识别宿主', t => {
   const s = setup(t); install(s);
-  const fake = join(s.base, '假 agent.mjs'); fs.copyFileSync(join(project, 'tests/fixtures/fake-agent.txt'), fake);
-  Object.assign(s.env, { CODEX_DISPATCH_TEST_AGENT: fake, CODEX_NO_WATCH: '1', FAKE_FIXTURES: JSON.stringify([join(project, 'tests/fixtures/codex-sample.jsonl')]), FAKE_ECHO: join(s.base, '参数.json') });
+  assert.equal(spawnSync('git', ['init', '--quiet', s.base]).status, 0);
+  const fake = join(s.base, '假 agent.cjs'); fs.copyFileSync(join(project, 'tests/fixtures/app-server.txt'), fake);
+  Object.assign(s.env, { CODEX_DISPATCH_TEST_AGENT: fake, CODEX_NO_WATCH: '1' });
   for (const host of ['claude-code', 'devin']) {
     if (host === 'claude-code') s.env.CLAUDECODE = '1'; else delete s.env.CLAUDECODE;
-    const result = s.cli(['测试任务', '--name', host], join(s.target(host), 'codex-task.mjs'));
+    const result = s.cli(['测试任务', '--name', host, '--background'], join(s.target(host), 'codex-task.mjs'));
     assert.equal(result.status, 0, result.stderr);
     const rows = fs.readFileSync(join(s.home, 'runs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(rows.filter(r => r.event === 'start').at(-1).dispatcher.host, host);
@@ -620,33 +621,34 @@ test('macOS 宿主目录检测、隔离安装、派发及回退', t => {
   for (const h of hosts) {
     const target = join(h.root, 'codex-dispatch');
     assert.equal(installationStatus(target, h.host, 'codex-dispatch').state, 'owned');
-    const fake = join(s.base, '假 agent.mjs');
-    fs.copyFileSync(join(project, 'tests/fixtures/fake-agent.txt'), fake);
-    Object.assign(s.env, { CODEX_NO_WATCH: '1', FAKE_FIXTURES: '[]', FAKE_ECHO: join(s.base, '参数.json') });
+    assert.equal(spawnSync('git', ['init', '--quiet', s.base]).status, 0);
+    const fake = join(s.base, '假 agent.cjs');
+    fs.copyFileSync(join(project, 'tests/fixtures/app-server.txt'), fake);
+    s.env.CODEX_NO_WATCH = '1';
     writeConfig(s.home, { path: fake });
-    const dispatched = s.cli(['隔离任务', '--host', h.host], join(target, 'codex-task.mjs'));
+    const dispatched = s.cli(['隔离任务', '--host', h.host, '--background'], join(target, 'codex-task.mjs'));
     assert.equal(dispatched.status, 0, dispatched.stderr);
   }
   rollback(options);
   for (const h of hosts) for (const skill of ['codex-dispatch', 'dual-role-workflow']) assert.equal(fs.existsSync(join(h.root, skill)), false);
 });
 test('清单 spec 和进度文件路径统一为 /，无效配置提示文案及错误前缀完整', t => {
-  const s = setup(t), fake = join(s.base, '假 agent.mjs');
-  fs.copyFileSync(join(project, 'tests/fixtures/fake-agent.txt'), fake);
-  const samples = join(s.base, '事件.jsonl');
-  write(samples, JSON.stringify({ type: 'item.completed', item: { type: 'error', message: '示例条目错误' } }) + '\n' + JSON.stringify({ type: 'item.completed', item: { type: 'file_change', changes: [{ kind: 'add', path: join(s.base, 'src/new.ts') }] } }) + '\n');
+  const s = setup(t), fake = join(s.base, '假 agent.cjs');
+  assert.equal(spawnSync('git', ['init','--quiet',s.base]).status,0);
+  fs.copyFileSync(join(project, 'tests/fixtures/app-server.txt'), fake);
+  write(join(s.base,'agent.json'), JSON.stringify({fixtureFile:true,fixtureError:true}));
   write(join(s.base, 'docs/任务.md'), '任务');
-  Object.assign(s.env, { CODEX_NO_WATCH: '1', FAKE_FIXTURES: JSON.stringify([samples]), FAKE_ECHO: join(s.base, '参数.json') });
+  Object.assign(s.env, { CODEX_NO_WATCH: '1' });
   const entry = join(project, 'skills/codex-dispatch/codex-task.mjs');
   writeConfig(s.home, { path: fake });
-  let result = s.cli([join(s.base, 'docs/任务.md')], entry); assert.equal(result.status, 0, result.stderr);
+  let result = s.cli([join(s.base, 'docs/任务.md'), '--background'], entry); assert.equal(result.status, 0, result.stderr);
   let row = fs.readFileSync(join(s.home, 'runs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)[0];
   assert.equal(row.spec, 'docs/任务.md');
   assert.match(fs.readFileSync(row.progress, 'utf8'), /新增文件：src\/new.ts/);
   assert.match(fs.readFileSync(row.progress, 'utf8'), /出错：示例条目错误/);
   for (const [invalid, reason] of [['{', '不是有效的 JSON'], ['{"v":2}', 'v 不是 1']]) {
     write(join(s.home, 'config.json'), invalid); s.env.CODEX_DISPATCH_TEST_AGENT = fake;
-    result = s.cli(['任务'], entry); assert.equal(result.status, 0, result.stderr);
+    result = s.cli(['任务', '--background'], entry); assert.equal(result.status, 0, result.stderr);
     const warning = `配置：config.json 无法读取（${reason}），本次按内置默认运行`;
     assert.ok(result.stdout.includes(warning));
     row = fs.readFileSync(join(s.home, 'runs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(r => r.event === 'start').at(-1);

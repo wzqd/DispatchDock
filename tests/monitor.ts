@@ -14,6 +14,12 @@ import { selectTasks } from '../app/src/renderer/taskList';
 const row=(extra={})=>({v:1,event:'start',id:'sample',repo:path.resolve('/demo/project'),name:'task',title:'演示',spec:null,role:null,pid:42,started:100000,progress:path.resolve('/demo/project/task.progress.log'),report:path.resolve('/demo/project/task.md'),model:null,effort:null,tier:null,...extra});
 const lines=(...rows:unknown[])=>rows.map(r=>JSON.stringify(r)).join('\n')+'\n';
 
+test('对话执行位置以最新事件为准，只接受完整 UUID 并兼容旧行',()=>{
+    const thread={v:1,event:'thread',id:'sample',threadId:'00000000-0000-4000-8000-000000000011',mode:'specified',runner:'background'};
+    assert.equal(parseRegistry(lines(row()))[0].threadId,undefined);
+    const t=parseRegistry(lines(row(),thread,{...thread,runner:'desktop'},{...thread,threadId:'../bad'}))[0];
+    assert.equal(t.threadMode,'specified');assert.equal(t.threadId,thread.threadId);assert.equal(t.runner,'desktop');
+});
 test('任务搜索组合关键词、项目与状态，计数随搜索变化但不随状态筛选变化', () => {
     const base = parseRegistry(lines(row()))[0];
     const tasks = [
@@ -39,6 +45,16 @@ test('搜索按字面匹配并归一化 Unicode，不执行正则也不拼接字
 });
 const ps={pid:42,name:'node.exe',command:'node "C:\\demo\\codex-task.mjs"',created:99000};
 const fixture=async()=>{const home=await mkdtemp(path.join(os.tmpdir(),'dispatchdock-test-'));await mkdir(path.join(home,'monitor'));const entry=row({repo:home,progress:path.join(home,'task.progress.log'),report:path.join(home,'task.md'),events:path.join(home,'task.events.jsonl')});await writeFile(path.join(home,'runs.jsonl'),lines(entry));return {home,entry,task:parseRegistry(lines(entry))[0]};};
+test('桌面执行拒绝停止 IPC，保持任务和执行进程',async t=>{
+    const f=await fixture();
+    await appendFile(path.join(f.home,'runs.jsonl'),lines({v:1,event:'thread',id:'sample',threadId:'00000000-0000-4000-8000-000000000011',mode:'new',runner:'desktop'}));
+    let kills=0;
+    const registry=new Registry(f.home,path.join(f.home,'monitor'),{processes:async()=>[ps],killTree:async()=>{kills++;},open:async()=>{}},()=>{},()=>{},e=>{throw e;});
+    t.after(async()=>{await registry.close();await rm(f.home,{recursive:true,force:true});});
+    await registry.start();
+    await assert.rejects(registry.stop('sample'));assert.equal(kills,0);
+    assert.equal(registry.tasks[0].status,'run');
+});
 test('导入通过目录别名访问的已登记任务时不重复显示', async t => {
     const { home, entry } = await fixture();
     let registry: Registry | undefined;

@@ -6,7 +6,7 @@ import type { Task } from '../shared/types';
 import { commitFrom } from '../shared/markdown';
 import { c } from '../shared/copy';
 import { dispatchMatches, type Platform, type ProcessInfo } from './platform';
-import { canonicalPath } from '../../../skills/codex-dispatch/lib/paths.mjs';
+import { canonicalPath, validThreadId } from '../../../skills/codex-dispatch/lib/paths.mjs';
 const repositoryKey = (repo: string) => { const file = canonicalPath(repo); return process.platform === 'win32' ? file.toLowerCase() : file; };
 export function mergeLine(tasks: Map<string, Task>, line: string) {
     try {
@@ -29,6 +29,11 @@ export function mergeLine(tasks: Map<string, Task>, line: string) {
             const t = tasks.get(e.id);
             if (!t)
                 return;
+            if (e.event === 'thread' && validThreadId(e.threadId) && ['new','resume','specified'].includes(e.mode) && ['desktop','background'].includes(e.runner)) {
+                t.threadId = e.threadId;
+                t.threadMode = e.mode;
+                t.runner = e.runner;
+            }
             if (e.event === 'spawned')
                 t.agentPid = e.agentPid ?? e.codexPid;
             if (e.event === 'end') {
@@ -240,11 +245,13 @@ export class Registry {
         return this.serial(async () => {
             await this.refresh();
             const t = this.tasks.find(t => t.id === id);
-            if (!t || t.imported || t.status !== 'run' || !t.pid)
+            if (!t || t.imported || t.status !== 'run' || !t.pid || t.runner === 'desktop')
                 throw Error(c.changed);
             const ps = await this.platform.processes([t.pid]);
             if (!dispatchMatches(ps.find(p => p.pid === t.pid), t.started))
                 throw Error(c.changed);
+            await this.refresh();
+            if (this.tasks.find(task => task.id === id)?.runner === 'desktop') throw Error(c.changed);
             await this.platform.killTree(t.pid);
             const after = await this.platform.processes([t.pid]);
             if (after.some(p => ps.some(old => old.pid === p.pid && old.created === p.created)))

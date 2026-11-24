@@ -32,17 +32,9 @@ async function fixture(t, { exit = 0, duration = 150, stderr = '', tree = false,
   for (const key of ['CODEX_DRY_RUN','CODEX_MODEL','CODEX_EFFORT','CODEX_TIER','CODEX_SANDBOX','CODEX_DISPATCH_TEST_AGENT','NODE_OPTIONS','ELECTRON_RUN_AS_NODE']) delete env[key];
   const agent = path.join(base, 'fake-agent.cjs');
   if (tree) fs.writeFileSync(path.join(base, 'descendant.cjs'), `require('node:fs').writeFileSync(require('node:path').join(__dirname,'descendant.json'),JSON.stringify({pid:process.pid}));setInterval(()=>{},1000);`);
-  fs.writeFileSync(path.join(base, 'agent.json'), JSON.stringify({ exit, duration, stderr, gated }));
-  fs.writeFileSync(agent, `const fs=require('node:fs'),path=require('node:path');
-if(process.argv.includes('--version')){console.log('codex-cli fake-managed');process.exit(0);}
-let prompt='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>prompt+=s);process.stdin.on('end',()=>{
-const settings=JSON.parse(fs.readFileSync(path.join(__dirname,'agent.json'),'utf8'));
-${tree ? "require('node:child_process').spawn(process.execPath,[path.join(__dirname,'descendant.cjs')],{stdio:'ignore',windowsHide:true,shell:false});" : ''}
-fs.writeFileSync(path.join(__dirname,'echo.json'),JSON.stringify({pid:process.pid,args:process.argv.slice(2),prompt,home:process.env.CODEX_HOME,key:process.env.OPENAI_API_KEY}));
-console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'隔离任务正在执行'}}));
-const finish=()=>{fs.writeFileSync(process.argv[process.argv.indexOf('-o')+1],'隔离汇报');if(settings.stderr)process.stderr.write(settings.stderr+'\\n');process.exitCode=settings.exit;};
-if(settings.gated){const timer=setInterval(()=>{if(fs.existsSync(path.join(__dirname,'release-agent'))){clearInterval(timer);finish();}},25);}else setTimeout(finish,settings.duration);
-});`);
+  fs.writeFileSync(path.join(base, 'agent.json'), JSON.stringify({ exit, duration, stderr, gated, tree, report: '隔离汇报' }));
+  fs.copyFileSync(path.join(root,'tests/fixtures/app-server.txt'), agent);
+  await execute('git',['init','--quiet',repo]);
   const configFile = path.join(home, 'config.json');
   fs.writeFileSync(configFile, JSON.stringify({ v: 1, managed: true, watchWindow: 'never', agents: { codex: { path: agent } } }));
   fs.writeFileSync(path.join(home, 'viewer.json'), JSON.stringify({ pid: process.pid, acceptsManaged: true, suppressWatchWindow: true }));
@@ -50,6 +42,7 @@ if(settings.gated){const timer=setInterval(()=>{if(fs.existsSync(path.join(__dir
   const script = path.join(host, 'skills/codex-dispatch/codex-task.mjs');
   const children = new Set(), services = [];
   function launch(file = script, args = ['隔离任务', '--name', 'managed-test'], overrides = {}) {
+    if (args.length && !args[0].startsWith('--')) args = [...args, '--background'];
     const child = spawn(process.execPath, [file, ...args], { cwd: repo, env: { ...env, ...overrides }, stdio: ['ignore','pipe','pipe','ipc'], windowsHide: true, shell: false });
     children.add(child);
     let stdout = '', stderr = '';
@@ -76,17 +69,17 @@ test('托管完整流程：退出码、唯一清单、执行者 PID、预计算�
   const f = await fixture(t, { exit: 7, stderr: 'Not inside a trusted directory' }); const { errors } = await f.service();
   const waiter = f.launch(f.script, ['隔离任务','补充说明','--name','managed-test','--model','explicit-model'], { CODEX_EFFORT: 'high' });
   const result = await waiter.done;
-  assert.equal(result.code, 7, result.stderr);
+  assert.equal(result.code, 1, result.stderr);
   assert.match(result.stdout, /^记录名：managed-test\r?\n进度：/);
   assert.match(result.stdout, /托管：任务已交给 DispatchDock/);
   // 托管时出错原因也要回到等待者的输出里。
-  assert.match(result.stdout, /出错：Not inside a trusted directory\r?\n出错：当前目录不是 git 仓库[^\n]*\r?\nexit=7 /);
-  const records = rows(f.home); assert.deepEqual(records.map(r => r.event), ['start','spawned','end']);
-  const [start, spawned, end] = records;
-  assert.equal(start.managed, true); assert.notEqual(start.pid, waiter.pid); assert.equal(end.exit, 7);
+  assert.match(result.stdout, /出错：Not inside a trusted directory\r?\nexit=1 /);
+  const records = rows(f.home); assert.deepEqual(records.map(r => r.event), ['start','spawned','thread','end']);
+  const [start, spawned, , end] = records;
+  assert.equal(start.managed, true); assert.notEqual(start.pid, waiter.pid); assert.equal(end.exit, 1);
   assert.equal(start.model, 'explicit-model'); assert.equal(start.effort, 'high');
   const echo = json(path.join(f.base, 'echo.json')); assert.equal(spawned.agentPid, echo.pid); assert.equal(echo.prompt, '执行中不要弹出让用户选择或确认的提示。小的不一致（例如工具、浏览器的名字和任务说明写法不同，但显然是同一个东西）自己判断后继续，在汇报里写明；只有真正必须用户决定的事（付款、对外发布、登录、验证码、改账号设置等）才停下：直接结束本轮，在汇报里说明原因，不要弹窗等用户选。\n任务：\n隔离任务\n补充说明'); assert.equal(echo.home, f.env.CODEX_HOME);
-  const progress = fs.readFileSync(start.progress, 'utf8'); assert.equal((progress.match(/托管：任务已交给/g) || []).length, 1); assert.match(progress.trimEnd(), /=== Codex 结束：exit=7.*===$/);
+  const progress = fs.readFileSync(start.progress, 'utf8'); assert.equal((progress.match(/托管：任务已交给/g) || []).length, 1); assert.match(progress.trimEnd(), /=== Codex 结束：exit=1.*===$/);
   await until(() => fs.readdirSync(path.join(f.home, 'managed')).length === 0); assert.deepEqual(errors, []);
 });
 
@@ -105,7 +98,7 @@ for (const kind of ['outside','modified','node']) test(`托管拒绝 ${kind}：�
   const result = await waiter.done;
   assert.equal(result.code, 0, result.stderr); assert.ok(Date.now() - before < 4000);
   assert.match(result.stdout, kind === 'node' ? /没有接手（node 路径无效）/ : /没有接手（派发脚本不是由 DispatchDock 安装的，或者被改过）/);
-  const all = rows(f.home); assert.deepEqual(all.map(r => r.event), ['start','spawned','end']); assert.equal(all[0].managed, undefined); assert.equal(all[0].pid, waiter.pid);
+  const all = rows(f.home); assert.deepEqual(all.map(r => r.event), ['start','spawned','thread','end']); assert.equal(all[0].managed, undefined); assert.equal(all[0].pid, waiter.pid);
   assert.match(fs.readFileSync(all[0].progress, 'utf8'), /改为直接运行/);
 });
 
@@ -136,7 +129,7 @@ test('认领后执行者启动失败写 rejected，等待者立即回退且只�
   const result = await waiter.done;
   assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /没有接手（启动 Codex 失败/);
   assert.ok(Date.now() - before < 4000);
-  assert.deepEqual(rows(f.home).map(r => r.event), ['start','spawned','end']); assert.equal(rows(f.home)[0].pid, waiter.pid);
+  assert.deepEqual(rows(f.home).map(r => r.event), ['start','spawned','thread','end']); assert.equal(rows(f.home)[0].pid, waiter.pid);
   assert.equal(rows(f.home)[0].managed, undefined);
 });
 
@@ -181,6 +174,23 @@ for (const [label, app, expected] of [
   const progress = fs.readFileSync(start.progress, 'utf8').split(/\r?\n/).filter(line => line.includes('托管：'));
   assert.equal(progress.length, 1);
   assert.equal(progress[0].replace(/^\[[^\]]+\] /, ''), message);
+});
+
+test('托管快照传递新开、指定对话和后台标志，拒绝冲突或错误类型',async t=>{
+  const f=await fixture(t);
+  const waiter=f.launch(f.script,['第一轮','--new-thread','--model','example-model'],{CODEX_EFFORT:'high'});
+  const request=json(await requestFrom(f));
+  assert.deepEqual([request.args.thread,request.args.newThread,request.args.background],[null,true,true]);
+  assert.deepEqual(request.args.overrides,['model','effort']);
+  for(const fields of [{thread:'id'},{background:'true'},{newThread:1},{overrides:'model'},{overrides:['path']}])
+    assert.equal(validRequest({...request,args:{...request.args,...fields}}),false);
+  const legacy={...request.args};for(const key of ['thread','newThread','background','overrides']) delete legacy[key];
+  assert.ok(validRequest({...request,args:legacy}));
+  await f.service();assert.equal((await waiter.done).code,0);
+  const id=rows(f.home).find(e=>e.event==='thread').threadId;
+  const next=await f.launch(f.script,['第二轮','--thread',id]).done;assert.equal(next.code,0,next.stdout);
+  const used=rows(f.home).filter(e=>e.event==='thread').at(-1);
+  assert.deepEqual([used.threadId,used.mode,used.runner],[id,'specified','background']);
 });
 
 test('旧请求没有 app：执行者使用默认名字，不读取当前 viewer 名字', async t => {
@@ -232,7 +242,7 @@ test('认领后未启动：超时收回直接运行，迟到执行者不写任�
   assert.equal(late.code, 0); assert.equal(late.stdout, ''); assert.equal(late.stderr, '');
   assert.equal(fs.readFileSync(path.join(f.home, 'runs.jsonl'), 'utf8'), records);
   for (const [name, value] of files) assert.equal(fs.readFileSync(path.join(f.repo, '.codex-runs', name), 'utf8'), value);
-  assert.deepEqual(rows(f.home).map(r => r.event), ['start','spawned','end']);
+  assert.deepEqual(rows(f.home).map(r => r.event), ['start','spawned','thread','end']);
 });
 
 for (const executorFirst of [true, false]) test(`执行者与收回竞争：执行者先取得运行权=${executorFirst}`, async t => {
@@ -244,7 +254,7 @@ for (const executorFirst of [true, false]) test(`执行者与收回竞争：执�
   const executor = f.launch(f.script, ['--run-request', claimed]);
   const [a, b] = await Promise.all([waiter.done, executor.done]);
   assert.equal(a.code, 0, a.stderr); assert.equal(b.code, 0, b.stderr);
-  assert.deepEqual(rows(f.home).map(r => r.event), ['start','spawned','end']);
+  assert.deepEqual(rows(f.home).map(r => r.event), ['start','spawned','thread','end']);
   assert.equal(rows(f.home)[0].pid, executorFirst ? executor.pid : waiter.pid);
   assert.equal(fs.existsSync(claimed.replace('.claimed.json', '.running.json')), executorFirst);
 });
@@ -279,7 +289,7 @@ process.send('ready');process.once('message',async file=>{process.disconnect();p
     const [a, b] = await Promise.all([waiter.done, executor.done]);
     assert.equal(a.code, 0, a.stderr); assert.equal(b.code, 0, b.stderr);
     const records = rows(f.home).filter(r => r.id === request.id);
-    assert.deepEqual(records.map(r => r.event), ['start','spawned','end']);
+    assert.deepEqual(records.map(r => r.event), ['start','spawned','thread','end']);
     assert.ok([executor.pid,waiter.pid].includes(records[0].pid));
   }
 });
@@ -321,7 +331,7 @@ for (const mode of ['off','dead','legacy','dry']) test(`不满足托管条件 ${
   if (mode === 'legacy') fs.writeFileSync(path.join(f.home,'viewer.json'),JSON.stringify({pid:process.pid}));
   const result = await f.launch(f.script, ['隔离任务'], mode === 'dry' ? {CODEX_DRY_RUN:'1'} : {}).done;
   assert.equal(result.code,0,result.stderr); assert.doesNotMatch(result.stdout,/托管：/); assert.equal(fs.existsSync(path.join(f.home,'managed')),false);
-  assert.equal(rows(f.home).length,mode==='dry'?0:3);
+  assert.equal(rows(f.home).length,mode==='dry'?0:4);
 });
 
 test('请求校验、环境白名单、完整行读取和启动清理', async t => {
@@ -339,16 +349,20 @@ test('请求校验、环境白名单、完整行读取和启动清理', async t 
 test('终止假派活方整棵进程树，执行者和假 agent 继续到 end', async t => {
   const f=await fixture(t,{gated:true});await f.service();
   const hostFile=path.join(f.base,'fake-host.mjs');
-  fs.writeFileSync(hostFile,`import {spawn} from 'node:child_process';const child=spawn(process.execPath,[${JSON.stringify(f.script)},'隔离任务'],{stdio:'inherit',windowsHide:true,shell:false});child.on('close',code=>process.exit(code));`);
+  fs.writeFileSync(hostFile,`import {spawn} from 'node:child_process';const child=spawn(process.execPath,[${JSON.stringify(f.script)},'隔离任务','--background'],{stdio:'inherit',windowsHide:true,shell:false});child.on('close',code=>process.exit(code));`);
   const host=f.launch(hostFile,[]);
   const started=await until(()=>rows(f.home).find(r=>r.event==='spawned'));
   await until(()=>fs.existsSync(path.join(f.base,'echo.json')));
   const executor=rows(f.home)[0];
-  await killProcessTree(host.pid);
-  assert.equal(alive(host.pid),false);assert.equal(alive(executor.pid),true);assert.equal(alive(started.agentPid),true);
-  // 存活断言通过后才允许假任务完成，不与进程树查询速度竞争。
-  fs.writeFileSync(path.join(f.base,'release-agent'),'');
-  const end=await until(()=>rows(f.home).find(r=>r.event==='end'));assert.equal(end.exit,0);
+  try {
+    await killProcessTree(host.pid);
+    assert.equal(alive(host.pid),false);assert.equal(alive(executor.pid),true);assert.equal(alive(started.agentPid),true);
+  } finally {
+    // 进程查询被操作系统拒绝时也让假执行者和等待者正常结束，再清理临时目录。
+    fs.writeFileSync(path.join(f.base,'release-agent'),'');
+    const end=await until(()=>rows(f.home).find(r=>r.event==='end'));assert.equal(end.exit,0);
+    await host.done;
+  }
   t.diagnostic('仅结束本测试假派活方的进程树：派活方与等待者退出；执行者、假 agent 存活；唯一 end.exit=0。');
 });
 
@@ -378,7 +392,7 @@ for (const managed of [false, true]) test(`停止命令结束多层假进程，�
   for (const pid of [start.pid, spawned.agentPid, descendant]) assert.equal(alive(pid), false, `假进程 ${pid} 已退出`);
   const finished = await waiter.done;
   if (managed) assert.equal(finished.code, 1);
-  assert.deepEqual(rows(f.home).map(r => r.event), ['start','spawned','interrupted']);
+  assert.deepEqual(rows(f.home).map(r => r.event), ['start','spawned','thread','interrupted']);
   assert.equal(rows(f.home).at(-1).signal, 'stopped-by-command');
   const again = await f.launch(f.script, ['--stop', name]).done;
   assert.equal(again.code, 0); assert.equal(again.stdout.trim(), `停止：${name}（已经结束）`);
@@ -397,6 +411,6 @@ for (const signal of ['SIGINT','SIGTERM','SIGBREAK','SIGHUP']) test(`信号 ${si
   child.send(signal);
   assert.equal((await child.done).code, 1);
   assert.equal(alive(spawned.agentPid), false); assert.equal(alive(descendant), false);
-  assert.deepEqual(rows(f.home).map(r => r.event), ['start','spawned','interrupted']);
+  assert.deepEqual(rows(f.home).map(r => r.event), ['start','spawned','thread','interrupted']);
   assert.equal(rows(f.home).at(-1).signal, signal);
 });

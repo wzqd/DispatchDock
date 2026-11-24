@@ -116,7 +116,7 @@ export class PreferencesView {
         const d=b.dataset;
         if(d.setting) {
             const key=d.setting;
-            menu(b,[{label:p.follow(this.settings.current[key]),run:()=>{void this.save(key,null);}},...(key==='model'?[{label:p.customModel,run:()=>this.modelInput(b)}]:(key==='effort'?['minimal','low','medium','high','xhigh']:['default','priority','flex']).map(value=>({label:value,run:()=>{void this.save(key,value);}})))],true); return;
+            menu(b,[{label:p.follow(this.settings.current[key]),run:()=>{void this.save(key,null);}},...(key==='model'?[{label:p.customModel,run:()=>this.modelInput(b)}]:(key==='effort'?['minimal','low','medium','high','xhigh','max','ultra']:['default','priority','flex']).map(value=>({label:value,run:()=>{void this.save(key,value);}})))],true); return;
         }
         if(d.segment) { await this.save(d.segment,d.value!,d.segment==='theme'); return; }
         if(d.choice) { this.selected.has(d.choice)?this.selected.delete(d.choice):this.selected.add(d.choice); this.render(); return; }

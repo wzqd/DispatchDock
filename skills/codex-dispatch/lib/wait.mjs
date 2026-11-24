@@ -42,7 +42,7 @@ export function* reverseRows(file) {
   finally { if (fd !== undefined) closeSync(fd); }
 }
 
-const repoKey = value => {
+export const repoKey = value => {
   const file = canonicalPath(value);
   return process.platform === 'win32' ? file.toLowerCase() : file;
 };

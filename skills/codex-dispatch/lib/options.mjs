@@ -3,15 +3,20 @@ import { basename, extname, join, resolve } from 'node:path';
 
 export function parseArgs(args) {
   const opts = {}, positional = [];
-  const names = ['role', 'name', 'host', 'model', 'effort', 'tier', 'sandbox', 'watch-window'];
+  const names = ['role', 'name', 'host', 'model', 'effort', 'tier', 'sandbox', 'watch-window', 'thread'];
   for (let k = 0; k < args.length; k++) {
     const a = args[k];
     if (a === '--') { positional.push(...args.slice(k + 1)); break; }
+    if (a === '--new-thread' || a === '--background') {
+      opts[a === '--background' ? 'background' : 'newThread'] = true;
+      continue;
+    }
     if (a.startsWith('--')) {
       if (!names.includes(a.slice(2)) || !args[k + 1] || args[k + 1].startsWith('--')) throw new Error(`参数无效或缺少值：${a}`);
       opts[a.slice(2)] = args[++k];
     } else positional.push(a);
   }
+  if (opts.thread && opts.newThread) throw Error('--thread 和 --new-thread 不能同时使用');
   if (!positional[0]) throw new Error('用法：node codex-task.mjs <任务说明文件 | "任务文字"> ["补充说明"] [--role <角色文档名>] [--name <记录名>] [--host <claude-code|devin>]');
   if (opts.host && !['claude-code', 'devin'].includes(opts.host)) throw new Error(`无效的派活方：${opts.host}`);
   return { opts, task: positional[0], extra: positional[1] ?? '' };

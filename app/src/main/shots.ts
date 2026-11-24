@@ -4,7 +4,7 @@ import { nativeTheme } from 'electron';
 import { mkdir, writeFile, readFile, appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { open } from 'node:fs/promises';
 import type { Registry } from './registry';
 export async function capture(win: BrowserWindow, registry: Registry, out: string) {
@@ -168,6 +168,14 @@ export async function capture(win: BrowserWindow, registry: Registry, out: strin
     await click('[data-tab=params]');
     await check('托管参数显示是','[...document.querySelectorAll(".rows .r")].some(r=>r.querySelector(".k")?.textContent==="托管" && r.querySelector(".v")?.textContent==="是")');
     await check('参数显示统一事件与原始输出的打开按钮', '!!document.querySelector("[data-open=events]") && !!document.querySelector("[data-open=raw]")');
+    await appendFile(registry.file, JSON.stringify({v:1,event:'thread',id:'t1',threadId:'00000000-0000-4000-8000-000000000011',mode:'resume',runner:'desktop',at:Date.now()})+'\n');
+    await registry.refresh();
+    await wait('document.querySelector(".tab-body").textContent.includes("接着上次的对话") && !!document.querySelector(".acts [data-open=thread]")');
+    await check('参数显示 Codex 对话和执行位置','document.querySelector(".tab-body").textContent.includes("Codex 桌面版")');
+    await save('codex-thread-params');
+    await click('[data-tab=flow]');
+    await check('桌面执行按钮替换停止','!!document.querySelector(".acts [data-open=thread]") && !document.querySelector("[data-stop]")');
+    await save('codex-desktop-running');
     await click('[data-project]');
     await check('自制项目下拉', '!!document.querySelector("[role=listbox]") && !document.querySelector("select")');
     await click('.ctx button:nth-child(2)');
@@ -222,14 +230,16 @@ async function prepareManagedExit(registry: Registry, out: string) {
     const home = process.env.CODEX_DISPATCH_HOME!, node = process.env.DISPATCHDOCK_TEST_NODE!;
     assert.ok(path.isAbsolute(node) && /^node(?:\.exe)?$/i.test(path.basename(node)));
     const repo = path.join(home, 'managed-exit-repo'), agent = path.join(home, 'managed-exit-agent.cjs');
-    const ready = path.join(home, 'managed-exit-agent.json');
+    const ready = path.join(home, 'echo.json');
     await mkdir(repo, { recursive: true });
-    await writeFile(agent, `const fs=require('node:fs');if(process.argv.includes('--version')){console.log('codex-cli fake-exit');process.exit(0);}process.stdin.resume();process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:process.pid}));console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'正在验证软件退出后的托管任务'}}));setTimeout(()=>{fs.writeFileSync(process.argv[process.argv.indexOf('-o')+1],'隔离任务完成');},5000);});`);
+    assert.equal(spawnSync('git', ['init','--quiet',repo], {windowsHide:true}).status,0);
+    await writeFile(agent, await readFile(path.resolve('tests/fixtures/app-server.txt')));
+    await writeFile(path.join(home,'agent.json'), JSON.stringify({duration:5000, report:'隔离任务完成'}));
     await writeFile(path.join(home, 'config.json'), JSON.stringify({ v: 1, managed: true, watchWindow: 'never', agents: { codex: { path: agent } } }));
     const script = path.join(process.env.CLAUDE_CONFIG_DIR!, 'skills/codex-dispatch/codex-task.mjs');
     const output = await open(path.join(home, 'managed-exit-waiter.log'), 'w');
     try {
-        const waiter = spawn(node, [script, '验证软件退出', '--name', 'managed-exit'], { cwd: repo, env: process.env, detached: true, stdio: ['ignore', output.fd, output.fd], shell: false, windowsHide: true });
+        const waiter = spawn(node, [script, '验证软件退出', '--name', 'managed-exit','--background'], { cwd: repo, env: process.env, detached: true, stdio: ['ignore', output.fd, output.fd], shell: false, windowsHide: true });
         await new Promise<void>((resolve, reject) => { waiter.once('spawn', resolve); waiter.once('error', reject); });
         waiter.unref();
     } finally { await output.close(); }
