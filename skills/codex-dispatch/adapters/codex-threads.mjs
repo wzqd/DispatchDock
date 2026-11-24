@@ -16,7 +16,7 @@ const activeWriter = error => /active writer/i.test(error.message);
 const missing = error => /(?:not found|no rollout found|does not exist|archived|no session found)/i.test(error.message);
 
 function threadSettings({ model, effort, tier, sandbox }) {
-  return { approvalPolicy: 'never', ...(model != null && { model }), ...(effort != null && { config: { model_reasoning_effort: effort } }),
+  return { ...(model != null && { model }), ...(effort != null && { config: { model_reasoning_effort: effort } }),
     ...(tier != null && { serviceTier: tier }), ...(sandbox != null && { sandbox }) };
 }
 
@@ -178,7 +178,9 @@ export async function executeCodex(context, { platform = desktop, poll = 1000, t
       }
     }
     if (!threadId) {
-      const result = await server.call('thread/start', { cwd: root, ...threadSettings(settings) });
+      const result = await server.call('thread/start', {
+        cwd: root, ...threadSettings(settings), approvalPolicy: 'on-request', approvalsReviewer: 'auto_review',
+      });
       threadId = result.thread.id;
       if (!validThreadId(threadId)) throw Error('Codex 对话 ID 无效');
       if (runner === 'background') release = await lockThread(home, threadId, id);

@@ -110,7 +110,8 @@ async function verify(args) {
       if(payload.type==='task_started') inTurn=payload.turn_id===turnId;
       if(inTurn && /approval|elicitation/.test(payload.type)) approvals.push(payload.type);
     }
-    return {threadId,turnId,model:context.model,effort:context.effort,approval:context.approval_policy,sandbox:context.sandbox_policy?.type,approvals};
+    return {threadId,turnId,model:context.model,effort:context.effort,approval:context.approval_policy,
+      approvalsReviewer:context.approvals_reviewer,sandbox:context.sandbox_policy?.type,approvals};
   }
   function say(name,flags=[]) {return dispatch(name,`只回复 ${name}，不要运行命令或改文件。`,flags).done;}
   let first, other;
@@ -198,9 +199,10 @@ async function verify(args) {
       const command=process.platform==='win32' ? "Set-Content -LiteralPath './sandbox-marker.txt' -Value OK -ErrorAction Stop" : 'echo OK > ./sandbox-marker.txt';
       const t=await dispatch('沙箱审批',`只在当前临时仓库的终端原样运行一次 ${command}。如被拒绝直接报告原因，不请求提升权限，不重试。`,['--thread',first.thread.threadId]).done;
       const turn=await turnEvidence(t);
-      evidence.sandboxProbe={configured:'read-only',approvalPolicy:'never',turn,markerExists:existsSync(join(root,name)),attemptObserved:t.kinds.includes('cmd'),report:t.report};
+      evidence.sandboxProbe={configured:'read-only',approvalPolicy:'on-request',approvalsReviewer:'auto_review',turn,
+        markerExists:existsSync(join(root,name)),attemptObserved:t.kinds.includes('cmd'),report:t.report};
       assert.ok(evidence.sandboxProbe.attemptObserved,'未观察到执行命令');
-      assert.equal(t.code,0);assert.equal(turn.sandbox,'read-only');assert.equal(turn.approval,'never');
+      assert.equal(t.code,0);assert.equal(turn.sandbox,'read-only');assert.equal(turn.approval,'on-request');assert.equal(turn.approvalsReviewer,'auto_review');
       assert.deepEqual(turn.approvals,[]);assert.equal(evidence.sandboxProbe.markerExists,false);
       return evidence.sandboxProbe;
     });

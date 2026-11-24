@@ -71,6 +71,7 @@ export function makeAdapter(executable) {
 
 - 同一规范化仓库路径和角色默认复用最近的 Codex 对话。`--new-thread` 新建，`--thread <UUID>` 指定，两者互斥。
 - 默认交给已关联 `codex://` 的桌面版。`--background` 或缺少关联时由 app-server 在后台运行。后台遇到桌面写入者时改为排队。
+- 两种方式新开对话时都在 `thread/start` 设置 `approvalPolicy: "on-request"` 和 `approvalsReviewer: "auto_review"`，由 Codex 自动审查越出沙箱的请求。后续轮次和续接的对话沿用已有审批设置。后台若仍收到审批请求，派发脚本会回复拒绝并记录一条 `error` 事件。
 - 新对话命名后，桌面方式先运行固定准备消息并释放写入权。占用探测在 `codex queue` 入队前完成，空闲对话随后通过链接打开。复用桌面对话时使用对话原有设置。只有派活方显式指定模型、强度、档位或沙箱时才写进度提示，托管请求通过 `args.overrides` 传递来源。
 - 观察者把队列条目的 `id` 和 `clientUserMessageId` 与历史中的 `userMessage.id/clientId` 对上，随后固定跟踪 `turn.id`。遇到缺少标识的历史时，只在入队前边界以后的轮次中比对完整指令。可能串单时报告错误。
 - 每约一秒读取轮次和分页条目。桌面历史缺少 token 计数时写 null。后台命令和进展由实时通知驱动。后台同对话持有进程锁。支持从命令行和软件停止后台任务，桌面任务可在 Codex 中打开并停止。

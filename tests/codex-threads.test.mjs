@@ -167,12 +167,40 @@ test('后台同对话互斥，回收失效锁；桌面任务不能从命令行�
   assert.equal(stopped.code,1);assert.match(stopped.output,/请在桌面版里停止/);assert.equal((await task).report,'外部停止');
 });
 
+for (const runner of ['desktop', 'background']) {
+  test(runner + ' 新开对话启用自动审查，续接与发起轮次沿用审批设置', async t => {
+    const f = fixture(t);
+    const flags = runner === 'background' ? ['--background'] : [];
+    const first = await f.dispatch('新开', [...flags, '--sandbox', 'read-only']);
+    const next = await f.dispatch('复用', flags);
+    assert.equal(first.thread.runner, runner);
+    assert.equal(next.thread.threadId, first.thread.threadId);
+    assert.equal(next.thread.mode, 'resume');
+    const calls = f.calls();
+    const starts = calls.filter(c => c.method === 'thread/start');
+    assert.equal(starts.length, 1);
+    assert.equal(starts[0].p.approvalPolicy, 'on-request');
+    assert.equal(starts[0].p.approvalsReviewer, 'auto_review');
+    assert.equal(starts[0].p.sandbox, 'read-only');
+    for (const method of ['thread/resume', 'turn/start']) {
+      const requests = calls.filter(c => c.method === method);
+      assert.ok(requests.length, method);
+      for (const { p } of requests) {
+        assert.ok(!Object.hasOwn(p, 'approvalPolicy'), method);
+        assert.ok(!Object.hasOwn(p, 'approvalsReviewer'), method);
+      }
+    }
+  });
+}
+
 test('非 git 提示及非交互审批拒绝',async t=>{
   const f=fixture(t,{git:false});const r=await f.dispatch('非仓库',['--background'],1);
   assert.match(r.output,/出错：Not inside a trusted directory/);assert.match(r.output,/当前目录不是 git 仓库/);
   assert.equal(spawnSync('git',['init','--quiet',f.root]).status,0);f.configure({approval:true});
-  const approved=await f.dispatch('审批',['--background']);assert.match(approved.progress,/出错：已拒绝 Codex 请求/);
-  assert.ok(f.calls().some(c=>c.result?.decision==='decline'));
+  const task=await f.dispatch('审批',['--background']);assert.match(task.progress,/出错：已拒绝 Codex 请求/);
+  const errors=lines(task.start.events).filter(e=>e.kind==='error');
+  assert.deepEqual(errors.map(e=>e.text),['已拒绝 Codex 请求：item/commandExecution/requestApproval']);
+  assert.ok(f.calls().some(c=>c.id===99 && c.result?.decision==='decline'));
 });
 
 test('app-server 同类条目转换后与匿名真实 exec 样例产生相同事件和进度',()=>{
