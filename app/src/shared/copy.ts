@@ -21,6 +21,12 @@ export const c = {
     stopped: '你停止了这个任务', stoppedHelp: '工作区里没提交的改动还在。要继续，在派活方的会话里重新派发。', stoppedShort: '手动停止',
     // 派活方用 --stop 停止的任务（signal 为 stopped-by-command），说明文字沿用 stoppedHelp
     stoppedByCommand: '派活方停止了这个任务', stoppedByCommandShort: '派活方停止',
+    // 在 Codex 桌面版里停止的任务（signal 为 stopped-in-codex，011），说明文字沿用 stoppedHelp
+    stoppedInCodex: '在 Codex 桌面版里停止了这个任务', stoppedInCodexShort: 'Codex 中停止',
+    // Codex 对话与执行位置（011）。参数页值为 `<ID>（<方式>）`
+    openThread: '在 Codex 中打开对话', openInCodex: '在 Codex 中打开',
+    thread: 'Codex 对话', threadModes: { new: '新开', resume: '接着上次的对话', specified: '指定的对话' } as Record<string, string>,
+    runner: '执行位置', runners: { desktop: 'Codex 桌面版', background: '后台' } as Record<string, string>,
     managed: '托管', yes: '是', no: '否', goSettings: '去设置', managedOn: '托管已开启', managedOff: '托管未开启',
     imported: '导入的旧任务', planNow: '当前',
 };

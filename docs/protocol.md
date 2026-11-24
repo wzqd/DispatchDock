@@ -2,7 +2,7 @@
 
 派发脚本（写）和监控软件（读）之间只通过本文的文件通信。
 
-状态：全部定稿。第 0～6 节 2026-10-08（001 验收后），第 8 节 2026-10-08（002 验收后），第 7 节 2026-10-08（005 实测后，005a 按最终规则实现）。第 9 节和第 7 节第 6 条 2026-10-16 定（010 实现）。定稿之后的改动按第 0 节的版本规则处理。
+状态：全部定稿。第 0～6 节 2026-10-08（001 验收后），第 8 节 2026-10-08（002 验收后），第 7 节 2026-10-08（005 实测后，005a 按最终规则实现）。第 9 节和第 7 节第 6 条 2026-10-16 定（010 实现）。第 10 节及各处标"011"的可选内容 2026-11-24 定（011 实现）。定稿之后的改动按第 0 节的版本规则处理。
 
 ## 0. 基本规则
 
@@ -25,6 +25,7 @@
 | `config.json` | 监控软件、安装命令、派发脚本的配置子命令或用户手写 | 派发默认配置（第 4 节） |
 | `viewer.json` | 监控软件 | 接管终端窗口（第 5 节） |
 | `backups/` | 安装器 | 替换或卸载技能前的备份（第 8 节） |
+| `threads/` | 派发脚本 | 后台执行时占用 Codex 对话的锁（第 10 节，011） |
 
 ## 2. 任务清单 `runs.jsonl`（`v: 1`）
 
@@ -36,8 +37,9 @@
 | `spawned` | `id`、`codexPid`、`at`；**`agentPid`**（和 `codexPid` 相同，新读取方用它） |
 | `end` | `id`、`exit`、`at`、`minutes` |
 | `interrupted` | `id`、`signal`、`at` |
+| **`thread`**（011） | `id`、`threadId`（Codex 对话 ID）、`mode`（`"new"` / `"resume"` / `"specified"`）、`runner`（`"desktop"` / `"background"`）、`at`。拿到对话 ID 后写一条；执行方式中途改变（后台改为交给桌面版）时再写一条，读取方以最后一条为准 |
 
-- `interrupted` 的 `signal`：派发脚本收到的信号名（`SIGINT`、`SIGTERM`、`SIGBREAK`、`SIGHUP`）；`stopped-by-app`（在监控软件里停止）；`stopped-by-command`（派发脚本的 `--stop`，见第 9 节）。其他读取方可能写自己的值，读取方不认识的值一律按"中断"处理。
+- `interrupted` 的 `signal`：派发脚本收到的信号名（`SIGINT`、`SIGTERM`、`SIGBREAK`、`SIGHUP`）；`stopped-by-app`（在监控软件里停止）；`stopped-by-command`（派发脚本的 `--stop`，见第 9 节）；`stopped-in-codex`（交给桌面版的任务在 Codex 桌面版里被停止，011）。其他读取方可能写自己的值，读取方不认识的值一律按"中断"处理。
 - `model` / `effort` / `tier` 在没有覆盖、交给干活方自己配置时写 `null`。旧的读取方显示时可能出现空白，这是可以接受的退化。
 - `dispatcher`：`{ "host": "claude-code" | "devin" | "unknown", "session": <宿主会话 ID 或 null> }`。识别顺序：命令行 `--host` > 环境变量 `CLAUDECODE=1`（Claude Code，会话取 `CLAUDE_CODE_SESSION_ID`）> 脚本路径含 `devin`（Devin 的技能目录）> `unknown`。Devin 没有可用的会话 ID 环境变量，`session` 写 null。会话 ID 只写进本机清单，不进任何仓库文件。
 
@@ -48,7 +50,7 @@
 | 文件 | 内容 |
 |---|---|
 | `<name>.md` | 最终汇报 |
-| `<name>.log` | 干活方的原始输出，原样保存，排查用。读取方**不应**依赖它的格式 |
+| `<name>.log` | 干活方的原始输出，原样保存，排查用。读取方**不应**依赖它的格式。011 起 Codex 适配器不再运行 `codex exec`，写入的是把 app-server 条目转换成 `codex exec --json` 格式的行（见第 6 节） |
 | `<name>.progress.log` | 给人看的精简进度（终端窗口显示它）。首行、末行和各行前缀的格式保持现状，见 3.2 |
 | `<name>.events.jsonl` | **新增**：统一事件，见 3.1。监控软件只读它 |
 
@@ -86,6 +88,7 @@
 - 中间每行 `[HH:MM:SS] <前缀><内容>`，前缀：`说：`、`思考：`、`运行：`、`  命令失败（exit N）：`、`新增文件：` / `修改文件：` / `删除文件：`、`计划：`、`搜索：`、`工具：`、`一轮结束（…）`、`出错：`、`配置：`；`text` 事件没有前缀
 - 旧版里 `item.error` 用的"错误："统一成"出错："；启动失败也写成"出错：…"。读取方仍应把旧日志里的"错误："当作出错
 - `配置：` 行只在配置有问题时出现，紧跟在首行之后，最多一行（见第 4 节）
+- `对话：`、`执行：`（011）：用哪个 Codex 对话、在哪里执行，紧跟在首行和可能的 `配置：` 行之后，执行中可能再出现（例如改为交给桌面版）。文案见 `docs/specs/011-codex-threads.md`「文案」
 - 末行 `=== Codex 结束：exit=<码>，用时 <分钟> 分钟，汇报在 <路径> ===`
 
 **进度文本由统一事件格式化得到**，不再单独解析原始输出。这样原始格式到统一事件的映射只在适配器里写一次。
@@ -149,6 +152,7 @@
    ```
    - 可选字段 `app`：等待者从 `viewer.json` 的 `app` 取的软件名（去首尾空白，最长 40 个字符，超长截断；读不到或不合法用 `DispatchDock`）。执行者写托管提示时用它，没有这个字段就用 `DispatchDock`。下文提示里的 `<软件名>` 都指它。
    - `settings` 是等待者已经按优先级算好的结果，执行者直接用，不再读环境变量和 `config.json`。
+   - `args` 可选字段（011）：`thread`（指定的对话 ID 或 null）、`newThread`（布尔）、`background`（布尔），对应命令行的 `--thread`、`--new-thread`、`--background`。缺失按 null / false 处理。
    - `env` 只放找到和运行干活方需要的、**不含机密**的变量：`PATH`、`CODEX_HOME`、`HOME`、`USERPROFILE`、`APPDATA`、`LOCALAPPDATA`、`TEMP`、`TMP`、`TMPDIR`、`SystemRoot`、`ComSpec`、`PATHEXT`、代理变量（`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`）、`OPENAI_BASE_URL`。**密钥、令牌一律不写进请求文件**（例如 `OPENAI_API_KEY`）。执行者的环境 = 软件自己的环境，再用请求里的 `env` 覆盖。
 2. **软件认领**：发现请求后先核对，通过后用**改名**认领：`<id>.request.json` → `<id>.claimed.json`，改名成功才算认领。随后启动执行者：`<node> <script> --run-request <claimed 文件>`。
    - 执行者**脱离软件的进程树**（detached），软件退出也不影响它。执行者不弹进度窗口（软件开着）。
@@ -198,3 +202,9 @@ node codex-task.mjs --stop <记录名>
 - 10 秒后仍有进程没退出：不写记录，打印 `停止：<记录名> 没能停下（<原因>）`，退出码 1。
 - 托管任务的等待者读到这条 `interrupted`，按第 7 节第 5 条以 1 退出。
 - 派发脚本自己收到 `SIGINT` 等信号时，退出前同样先结束干活方的进程树，再写 `interrupted`（`signal` 为信号名）。
+
+## 10. Codex 对话（2026-11-24，011）
+
+- **复用**：默认在 `runs.jsonl` 里找同一仓库（规范化路径）、同一角色（都没有角色也算同一类）最近一条 `thread` 事件，接着那个对话；找不到就新开。`--new-thread` 新开，`--thread <ID>` 接着指定的对话，两个不能同时给。
+- **执行方式**：默认交给 Codex 桌面版（`codex queue` 排队，必要时打开 `codex://threads/<ID>`），派发脚本从外部读这个对话跟进度；`--background` 或本机没装桌面版时后台执行（派发脚本自己运行 `codex app-server`）。细节见 `docs/specs/011-codex-threads.md`。
+- **锁**：只在后台执行时使用 `<home>/threads/<threadId>.lock`，内容 `{ "id": <任务 id>, "pid": <派发脚本进程>, "at": <毫秒> }`，独占创建，任务结束时删除；持有进程已经不在就视为失效，可以删掉重建。交给桌面版时由 Codex 自己的队列排队，不用这个锁。
