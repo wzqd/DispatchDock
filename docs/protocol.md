@@ -152,7 +152,7 @@
    ```
    - 可选字段 `app`：等待者从 `viewer.json` 的 `app` 取的软件名（去首尾空白，最长 40 个字符，超长截断；读不到或不合法用 `DispatchDock`）。执行者写托管提示时用它，没有这个字段就用 `DispatchDock`。下文提示里的 `<软件名>` 都指它。
    - `settings` 是等待者已经按优先级算好的结果，执行者直接用，不再读环境变量和 `config.json`。
-   - `args` 可选字段（011）：`thread`（指定的对话 ID 或 null）、`newThread`（布尔）、`background`（布尔），对应命令行的 `--thread`、`--new-thread`、`--background`。缺失按 null / false 处理。
+   - `args` 可选字段（011）：`thread`（指定的对话 ID 或 null）、`newThread`（布尔）、`background`（布尔），对应命令行的 `--thread`、`--new-thread`、`--background`；`overrides`（字符串数组，取值 `model` / `effort` / `tier` / `sandbox`）：等待者那边通过命令行或环境变量显式指定了的设置，只来自配置文件或内置默认的不算。缺失按 null / false / 空数组处理。
    - `env` 只放找到和运行干活方需要的、**不含机密**的变量：`PATH`、`CODEX_HOME`、`HOME`、`USERPROFILE`、`APPDATA`、`LOCALAPPDATA`、`TEMP`、`TMP`、`TMPDIR`、`SystemRoot`、`ComSpec`、`PATHEXT`、代理变量（`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`）、`OPENAI_BASE_URL`。**密钥、令牌一律不写进请求文件**（例如 `OPENAI_API_KEY`）。执行者的环境 = 软件自己的环境，再用请求里的 `env` 覆盖。
 2. **软件认领**：发现请求后先核对，通过后用**改名**认领：`<id>.request.json` → `<id>.claimed.json`，改名成功才算认领。随后启动执行者：`<node> <script> --run-request <claimed 文件>`。
    - 执行者**脱离软件的进程树**（detached），软件退出也不影响它。执行者不弹进度窗口（软件开着）。
