@@ -1,6 +1,6 @@
 # 012 派发的 Codex 对话默认「帮我批准」
 
-状态：已确认（2026-11-24）
+状态：已验收（2026-11-24）
 
 ## 背景（2026-11-24 本机实测）
 
@@ -45,4 +45,9 @@
 
 ## 验收记录
 
-（每轮验收后由设计负责人追加）
+### 第 1 轮 · 2026-11-24 · 通过
+
+- 工程提交 `8b85bc6`，4 个文件，均在允许范围内。`thread/start` 改为 `approvalPolicy: "on-request"` + `approvalsReviewer: "auto_review"`；后台续接的 `thread/resume` 去掉了原来的 `never` 覆盖，续接时沿用对话原有设置，与方案一致。
+- `npm run verify` 246 通过、8 跳过、0 失败。
+- 真实验证：对话 `01a20d0e-a1bd-7c41-95c1-88c994ed125c`。设计负责人直接读了它的 rollout：准备轮和桌面版执行的那一轮，`turn_context` 都是 `on-request` / `auto_review` / `workspace-write`，模型 `gpt-6.2-astra`。
+- 安装包重打后核对了 SHA-256，包内适配器已是新版。设计负责人随后在 SKILL.md 补了一句"新开的对话按「帮我批准」执行"，并重打了安装包。
