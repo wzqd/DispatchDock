@@ -8,4 +8,4 @@
 |---|---|---|
 | [011](011-codex-threads.md) | 派发交给 Codex 桌面版实时执行，默认复用对话；推理强度加 max、ultra | 已验收 |
 | [012](012-auto-review.md) | 派发的 Codex 对话默认「帮我批准」 | 已验收 |
-| [013](013-short-followup-prompt.md) | 接着同一个对话派发时，只发简短提醒和任务 | 已确认 |
+| [013](013-short-followup-prompt.md) | 接着同一个对话派发时，只发简短提醒和任务 | 已验收 |
