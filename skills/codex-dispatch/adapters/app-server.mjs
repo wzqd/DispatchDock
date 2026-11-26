@@ -36,10 +36,10 @@ export async function connect({ launcher, root, env, spawned, onError = () => {}
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', s => { stderr = (stderr + s).slice(-4096); });
   const send = value => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n');
-  const call = (method, params) => new Promise((resolve, reject) => {
+  const call = (method, params, timeout = 30000) => new Promise((resolve, reject) => {
     if (failure) return reject(failure);
     const id = ++next;
-    const timer = setTimeout(() => { pending.delete(id); reject(Error(`Codex 请求超时：${method}`)); }, 30000);
+    const timer = setTimeout(() => { pending.delete(id); reject(Error(`Codex 请求超时：${method}`)); }, timeout);
     pending.set(id, { resolve(value) { clearTimeout(timer); resolve(value); }, reject(e) { clearTimeout(timer); reject(e); } });
     send({ id, method, params });
   });
@@ -63,7 +63,7 @@ export async function connect({ launcher, root, env, spawned, onError = () => {}
     await closed;
   }
   try {
-    await call('initialize', { clientInfo: { name: 'dispatchdock', title: 'DispatchDock', version: '0.1.11' }, capabilities: { experimentalApi: true } });
+    await call('initialize', { clientInfo: { name: 'dispatchdock', title: 'DispatchDock', version: '0.1.12' }, capabilities: { experimentalApi: true } });
     send({ method: 'initialized' });
     return { call, close, listeners, failed };
   } catch (error) { await close(); throw error; }

@@ -16,7 +16,13 @@
 | `mapLine(line, {root})` | 一行 stdout 转成零到多个事件数组。事件只含协议规定的 `kind` 及附加字段，`v/seq/at` 由公共层追加。未知 JSON 事件丢弃，非空非 JSON 行转 `text` |
 | `failureHint(stderr)`（可选） | 干活方非 0 退出时，公共层先把 stderr 末尾几行写成一条 `error` 事件；适配器认得这类原因时返回一句中文说明（写成第二条 `error`），认不得返回 `null` |
 
-实现 `execute` 的适配器优先走该入口。上下文有 `root/home/id/title/role/prompt/opts/settings/explicitSettings/env/detection`。回调如下。
+实现 `execute` 的适配器优先走该入口。上下文有 `root/home/id/title/role/prompt/instructions/shortPrompt/opts/settings/explicitSettings/env/detection`。
+
+- `prompt` 是完整版指令；`instructions` 是其中任务那一行之前的说明部分；`shortPrompt` 是简短版（一行提醒 + 任务 + 补充说明）。
+- 适配器确定对话后选用一版：接着已有的对话，且对话最近 50 轮里有一条用户消息以 `instructions + '\n'` 开头时，发 `shortPrompt` 并 `announce` 一行 `指令：…`；新开对话、没找到或读历史失败时发 `prompt`。排队、发起一轮、按全文匹配本次轮次都要用实际发出的那一版。Codex 适配器用 `thread/turns/list` 的 `itemsView: "summary"` 读历史（只含用户消息和回复，数据量小）。
+- 单进程 `command` 接口不涉及对话，始终用 `prompt`。
+
+回调如下。
 
 - `spawned(pid, primary = true)` 跟踪子进程，返回的函数在子进程退出时调用。仅主执行者或观察者的 PID 公布到清单，短暂试探写入权的进程传 `false`。
 - `thread({threadId, mode, runner})` 写 v1 对话事件。执行位置变化时再写一次。

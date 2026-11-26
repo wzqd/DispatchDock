@@ -20,6 +20,29 @@ function threadSettings({ model, effort, tier, sandbox }) {
     ...(tier != null && { serviceTier: tier }), ...(sandbox != null && { sandbox }) };
 }
 
+const userText = item => item.content?.filter(part => part.type === 'text').map(part => part.text).join('');
+
+async function hasRecentInstructions(server, threadId, instructions) {
+  const prefix = instructions + '\n';
+  const deadline = Date.now() + 3000;
+  let remaining = 50, cursor;
+  try {
+    do {
+      const timeout = deadline - Date.now();
+      if (timeout <= 0) break;
+      const page = await server.call('thread/turns/list', {
+        threadId, sortDirection: 'desc', itemsView: 'summary', limit: remaining, cursor,
+      }, timeout);
+      if (page.data.slice(0, remaining).some(turn =>
+        turn.items.some(item => item.type === 'userMessage' && userText(item)?.startsWith(prefix)))) return true;
+      if (!page.data.length || !page.nextCursor || page.nextCursor === cursor) break;
+      remaining -= page.data.length;
+      cursor = page.nextCursor;
+    } while (remaining > 0);
+  } catch { /* 历史只用于缩短指令；读取失败时仍派发完整版。 */ }
+  return false;
+}
+
 async function ownedTurn(server, threadId, prompt, write) {
   const output = turnOutput(write);
   const early = [];
@@ -91,7 +114,7 @@ async function queuedTurn(server, context, threadId, platform, probe, poll, time
           target = turn.id; output.start();
           observe?.({ event: 'matched', turnId: target, clientId: identified.clientId, by: 'id' });
         } else if (users.some(i => (!clientId || !i.clientId) && !olderClients.has(i.clientId) &&
-          i.content?.filter(c => c.type === 'text').map(c => c.text).join('') === prompt)) {
+          userText(i) === prompt)) {
           unbound.push({ turn, newer });
         }
       }
@@ -204,18 +227,23 @@ export async function executeCodex(context, { platform = desktop, poll = 1000, t
         }
       }
     }
+    if (runner === 'desktop' && mode !== 'new' && context.explicitSettings) announce('执行：接着旧对话时，本次指定的模型、强度、档位、沙箱不生效，按这个对话原来的设置执行');
+    let prompt = context.prompt;
+    if (mode !== 'new' && await hasRecentInstructions(server, threadId, context.instructions)) {
+      prompt = context.shortPrompt;
+      announce('指令：这个对话里已有同样的完整说明，本次只发简短提醒和任务');
+    }
     if (runner === 'background') {
-      const turn = await ownedTurn(server, threadId, context.prompt, write);
+      const turn = await ownedTurn(server, threadId, prompt, write);
       return { code: turn.status === 'completed' ? 0 : 1 };
     }
-    if (mode !== 'new' && context.explicitSettings) announce('执行：接着旧对话时，本次指定的模型、强度、档位、沙箱不生效，按这个对话原来的设置执行');
     const probe = async () => {
       const writer = await openServer(false);
       try { await writer.call('thread/resume', { threadId, excludeTurns: true }); return false; }
       catch (e) { if (activeWriter(e)) return true; throw e; }
       finally { await writer.close(); }
     };
-    const turn = await queuedTurn(server, { ...context, launcher }, threadId, platform, probe, poll, timeout, observe);
+    const turn = await queuedTurn(server, { ...context, launcher, prompt }, threadId, platform, probe, poll, timeout, observe);
     return { code: turn.status === 'completed' ? 0 : 1, signal: turn.status === 'interrupted' ? 'stopped-in-codex' : undefined };
   } finally {
     try { await server?.close(); } finally { release?.(); }

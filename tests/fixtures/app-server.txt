@@ -63,12 +63,14 @@ rl.on('line', line => {
       ok({ turn: { id, status: 'inProgress' } });
       if (config.approval) send({ id: 99, method: 'item/commandExecution/requestApproval', params: ctx });
       const item = { type: 'agentMessage', id: randomUUID(), text: prep ? '已就绪' : reply(prompt) };
+      // 真实历史里每一轮都带用户消息，后台轮次也一样。
+      const user = { type: 'userMessage', id: randomUUID(), content: [{ type: 'text', text: prompt }] };
       if (config.fixtureError) notify('error', { ...ctx, error: { message: '示例条目错误' } });
       if (config.fixtureFile) notify('item/completed', { ...ctx, item: { type: 'fileChange', id: 'change', changes: [{ path: 'src/new.ts', kind: { type: 'add' } }] } });
       notify('item/completed', { ...ctx, item });
       const finish = () => {
         const error = config.exit || prep && config.prepFail ? { message: config.stderr || '准备失败' } : null;
-        const turn = { id, thread, at: Date.now(), items: [item], status: error ? 'failed' : 'completed', error };
+        const turn = { id, thread, at: Date.now(), items: [user, item], status: error ? 'failed' : 'completed', error };
         put('turn-' + id, turn); notify('turn/completed', { threadId: thread, turn });
       };
       if (config.gated) { const timer = setInterval(() => { if (fs.existsSync(file('release-agent'))) { clearInterval(timer); finish(); } }, 25); }
@@ -77,6 +79,8 @@ rl.on('line', line => {
     }
     case 'thread/queue/list': return ok(page(schedule(thread).filter(s=>s.start>Date.now()).map(s=>s.q)));
     case 'thread/turns/list': {
+      // summary 视图只用于判断对话里有没有完整说明：可模拟读取失败，或在最前面垫上若干无关轮次。
+      if (p.itemsView === 'summary' && config.historyFail) return fail('历史读取失败');
       const turns = history(thread);
       if (!config.neverStart && (config.occupied || fs.existsSync(file('opened-' + thread)))) {
         const at = Date.now();
@@ -90,6 +94,11 @@ rl.on('line', line => {
           turns.unshift({ id: q.turnId, status, completedAt: done ? Math.floor(end / 1000) : null, items, error: status === 'failed' ? { message: '桌面示例失败' } : null });
           if (!done) break;
         }
+      }
+      if (p.itemsView === 'summary' && config.filler) {
+        const filler = Array.from({ length: config.filler }, (_, i) => ({ id: 'filler-' + i, status: 'completed', completedAt: 1,
+          items: [{ type: 'userMessage', id: 'filler-user-' + i, content: [{ type: 'text', text: '无关的消息 ' + i }] }] }));
+        turns.unshift(...filler);
       }
       return ok(page(turns.slice(0, p.limit)));
     }

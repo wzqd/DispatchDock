@@ -41,7 +41,7 @@ export async function run({ adapter, scriptPath, args = process.argv.slice(2), e
   // dry-run 在读取配置、检测 agent、创建目录之前返回。
   const paths = request ? existingPaths(root, request.name) : recordPaths(root, details.name, progressHeader(details.title, details.role?.name, started), dryRun);
   if (dryRun) {
-    console.log(`记录名：${paths.name}\n----\n${details.prompt}`);
+    console.log(`记录名：${paths.name}\n----\n${details.prompt}\n----（接着已有同样完整说明的对话时，改发：）\n${details.shortPrompt}`);
     return 0;
   }
   console.log(`记录名：${paths.name}\n进度：${paths.progress}`);
@@ -137,6 +137,7 @@ export async function run({ adapter, scriptPath, args = process.argv.slice(2), e
     };
     try {
       const result = await adapter.execute({ root, home, id, title: details.title, role: details.role?.name ?? null, prompt: details.prompt,
+        instructions: details.instructions, shortPrompt: details.shortPrompt,
         settings, opts: parsed.opts, explicitSettings: overrides.length > 0, env, detection, spawned, write,
         thread: data => registry({ event: 'thread', id, ...data, at: Date.now() }),
         announce: text => { progress(text); if (!request && !interactive) console.log(text); },

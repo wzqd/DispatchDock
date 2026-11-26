@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, copyFileSync, readFileSync, readdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -213,4 +213,92 @@ test('app-server 同类条目转换后与匿名真实 exec 样例产生相同事
   }
   const map=events=>events.flatMap(e=>mapLine(JSON.stringify(e),{root:process.cwd()}));
   assert.deepEqual(map(converted),map(input));assert.deepEqual(map(converted).flatMap(formatProgress),map(input).flatMap(formatProgress));
+});
+
+// 013：接着已经收到过同样完整说明的对话时，只发简短提醒和任务。
+const POPUP='执行中不要弹出让用户选择或确认的提示。小的不一致（例如工具、浏览器的名字和任务说明写法不同，但显然是同一个东西）自己判断后继续，在汇报里写明；只有真正必须用户决定的事（付款、对外发布、登录、验证码、改账号设置等）才停下：直接结束本轮，在汇报里说明原因，不要弹窗等用户选。';
+const fullPrompt=task=>`${POPUP}\n任务：\n${task}`;
+const shortPrompt=task=>`规则同前（不弹出确认提示）。\n新任务：\n${task}`;
+const SHORT_NOTE='指令：这个对话里已有同样的完整说明，本次只发简短提醒和任务';
+const sentPrompts=(f,runner)=>runner==='desktop'
+  ? f.calls().filter(c=>c.method==='queue').map(c=>c.prompt)
+  : f.calls().filter(c=>c.method==='turn/start').map(c=>c.p.input[0].text).filter(s=>!s.startsWith('这是 DispatchDock'));
+
+for (const runner of ['desktop','background']) {
+  test(runner+' 对话里已有同样的完整说明时只发简短版，并写指令行',async t=>{
+    const f=fixture(t),flags=runner==='background'?['--background']:[];
+    const first=await f.dispatch('首次',flags);
+    const second=await f.dispatch('第二次',flags);
+    const third=await f.dispatch('第三次',[...flags,'--thread',first.thread.threadId]);
+    assert.equal(second.thread.mode,'resume');assert.equal(third.thread.mode,'specified');
+    assert.equal(second.thread.threadId,first.thread.threadId);
+    assert.deepEqual(sentPrompts(f,runner),[fullPrompt('首次'),shortPrompt('第二次'),shortPrompt('第三次')]);
+    assert.doesNotMatch(first.progress,/指令：/);
+    for(const r of [second,third]) {
+      assert.ok(r.progress.includes(SHORT_NOTE));assert.ok(r.output.includes(SHORT_NOTE));
+      assert.ok(r.progress.indexOf('执行：')<r.progress.indexOf(SHORT_NOTE),'指令行在对话、执行行之后');
+    }
+    assert.equal(second.report,'第二次');assert.equal(third.report,'第三次');
+  });
+}
+
+test('没有同样的完整说明、读历史失败、说明在 50 轮之前时发完整版',async t=>{
+  const f=fixture(t);
+  // 排进队列后一直没执行，之后队列被清掉：对话里只有准备那一轮。
+  f.configure({neverStart:true});
+  const id=(await f.dispatch('没执行',[],1)).thread.threadId;
+  for(const name of readdirSync(f.base)) if(name.startsWith('queue-')) rmSync(join(f.base,name));
+  f.configure({});
+  const prepOnly=await f.dispatch('只有准备轮',['--thread',id]);
+  writeFileSync(join(f.root,'role.md'),'# 角色：工程');
+  const role=await f.dispatch('换角色',['--role','role.md','--thread',id]);
+  f.configure({historyFail:true});
+  const failed=await f.dispatch('读历史失败',['--thread',id]);
+  f.configure({filler:50});
+  const far=await f.dispatch('五十轮之前',['--thread',id]);
+  f.configure({filler:49});
+  const near=await f.dispatch('四十九轮之内',['--thread',id]);
+  f.configure({});
+  writeFileSync(join(f.root,'AGENTS.md'),'# 规则');
+  const agents=await f.dispatch('有了 AGENTS',['--thread',id]);
+  const agentsAgain=await f.dispatch('再次 AGENTS',['--thread',id]);
+  const AGENTS='请先阅读仓库根目录的 AGENTS.md（共同规则）。';
+  assert.deepEqual(sentPrompts(f,'desktop'),[
+    fullPrompt('没执行'),fullPrompt('只有准备轮'),
+    `你在本项目中的角色是「工程」。\n${POPUP}\n再阅读你的角色文档 role.md，严格遵守其中的职责、硬规则、完成标准和汇报格式。\n任务：\n换角色`,
+    fullPrompt('读历史失败'),fullPrompt('五十轮之前'),shortPrompt('四十九轮之内'),
+    `${AGENTS}\n${POPUP}\n任务：\n有了 AGENTS`,
+    '规则同前（AGENTS.md、不弹出确认提示）；AGENTS.md 在上次任务之后有新提交的，先重读。\n新任务：\n再次 AGENTS',
+  ]);
+  for(const r of [prepOnly,role,failed,far,agents]) assert.doesNotMatch(r.progress,/指令：/,r.start.name);
+  for(const r of [near,agentsAgain]) assert.ok(r.progress.includes(SHORT_NOTE),r.start.name);
+  assert.equal(failed.report,'读历史失败');
+  assert.ok(f.calls().some(c=>c.method==='thread/turns/list'&&c.p.itemsView==='summary'&&c.p.limit===50));
+});
+
+test('托管执行者同样按对话历史选简短版，补充说明照旧接在最后',async t=>{
+  const f=fixture(t);
+  const thread=(await f.dispatch('新开')).thread.threadId;
+  const claim=join(f.home,'托管.claimed.json');
+  writeFileSync(claim,JSON.stringify({
+    v:1,id:'托管',name:'托管',at:Date.now(),repo:f.root,script:join(f.base,'codex-task.mjs'),node:process.execPath,
+    args:{task:'托管任务',extra:'补充说明',role:null,spec:null,thread,overrides:[]},
+    settings:{model:null,effort:null,tier:null,sandbox:'workspace-write',path:null},
+    dispatcher:{host:'unknown',session:null},env:{},
+  }));
+  const result=await f.launch(['--run-request',claim]);
+  assert.equal(result.code,0,result.output);
+  assert.equal(sentPrompts(f,'desktop').at(-1),`${shortPrompt('托管任务')}\n补充说明`);
+  const start=f.rows().find(e=>e.id==='托管'&&e.event==='start');
+  assert.ok(read(start.progress).includes(SHORT_NOTE));
+});
+
+test('缺少客户端标识时按简短版全文找到本次轮次',async t=>{
+  const f=fixture(t);
+  f.configure({occupied:true,noIds:true,startDelay:0});
+  const id=(await f.dispatch('开始')).thread.threadId;
+  const next=await f.dispatch('简短匹配',['--thread',id]);
+  assert.equal(sentPrompts(f,'desktop').at(-1),shortPrompt('简短匹配'));
+  const matched=f.observations().filter(o=>o.event==='matched'&&o.task==='简短匹配');
+  assert.deepEqual(matched.map(o=>o.by),['text']);assert.equal(next.report,'简短匹配');
 });
